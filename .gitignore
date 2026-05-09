@@ -1,0 +1,9 @@
+.worktrees
+.worktrees/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+*.egg-info/
+hermes.db
