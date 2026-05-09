@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from backend.app.api.routes import health
+from backend.app.api.routes import health, watchlist
 from backend.app.database import create_db_and_tables
 
 
@@ -13,9 +13,13 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     yield
 
 
-def create_app() -> FastAPI:
-    app = FastAPI(title="Hermes Trading Assistant", lifespan=lifespan)
+def create_app(*, create_tables_on_startup: bool = True) -> FastAPI:
+    app = FastAPI(
+        title="Hermes Trading Assistant",
+        lifespan=lifespan if create_tables_on_startup else None,
+    )
     app.include_router(health.router)
+    app.include_router(watchlist.router)
     return app
 
 
