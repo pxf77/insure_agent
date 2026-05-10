@@ -1,11 +1,17 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session, select
 
 from backend.app.api.deps import get_db_session
-from backend.app.models import Signal
-from backend.app.schemas import ScanRequest, ScanResponse, SignalRead
+from backend.app.models import ManualReview, Signal
+from backend.app.schemas import (
+    ManualReviewCreate,
+    ManualReviewRead,
+    ScanRequest,
+    ScanResponse,
+    SignalRead,
+)
 from backend.app.services.signal_engine import SignalEngine
 
 router = APIRouter(prefix="/api/signals", tags=["signals"])
@@ -30,3 +36,23 @@ def get_signal_or_404(session: Session, signal_id: int) -> Signal:
     if signal is None:
         raise HTTPException(status_code=404, detail="signal not found")
     return signal
+
+
+@router.post(
+    "/{signal_id}/manual-review",
+    response_model=ManualReviewRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_manual_review(
+    signal_id: int,
+    payload: ManualReviewCreate,
+    session: SessionDep,
+) -> ManualReview:
+    signal = get_signal_or_404(session, signal_id)
+    review = ManualReview(signal_id=signal_id, decision=payload.decision, note=payload.note)
+    signal.status = payload.decision
+    session.add(signal)
+    session.add(review)
+    session.commit()
+    session.refresh(review)
+    return review
