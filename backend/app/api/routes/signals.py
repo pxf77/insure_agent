@@ -1,0 +1,32 @@
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
+from sqlmodel import Session, select
+
+from backend.app.api.deps import get_db_session
+from backend.app.models import Signal
+from backend.app.schemas import ScanRequest, ScanResponse, SignalRead
+from backend.app.services.signal_engine import SignalEngine
+
+router = APIRouter(prefix="/api/signals", tags=["signals"])
+SessionDep = Annotated[Session, Depends(get_db_session)]
+
+
+@router.post("/scan", response_model=ScanResponse)
+def scan_signals(payload: ScanRequest, session: SessionDep) -> ScanResponse:
+    return ScanResponse(results=SignalEngine().scan_active_watchlist(session, payload.account))
+
+
+@router.get("", response_model=list[SignalRead])
+def list_signals(session: SessionDep, status_filter: str | None = None) -> list[Signal]:
+    statement = select(Signal)
+    if status_filter is not None:
+        statement = statement.where(Signal.status == status_filter)
+    return list(session.exec(statement).all())
+
+
+def get_signal_or_404(session: Session, signal_id: int) -> Signal:
+    signal = session.get(Signal, signal_id)
+    if signal is None:
+        raise HTTPException(status_code=404, detail="signal not found")
+    return signal

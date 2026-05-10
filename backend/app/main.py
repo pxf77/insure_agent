@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from backend.app.api.routes import health, watchlist
+from backend.app.api.routes import health, signals, watchlist
 from backend.app.database import create_db_and_tables
 
 
@@ -20,6 +20,7 @@ def create_app(*, create_tables_on_startup: bool = True) -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(watchlist.router)
+    app.include_router(signals.router)
     return app
 
 
