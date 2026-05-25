@@ -1,0 +1,22 @@
+app:
+  env: dev
+  timezone: Asia/Shanghai
+  artifact_dir: artifacts
+  log_level: INFO
+
+runtime:
+  communication_mode: file
+  allow_live_trading: false
+  require_manual_approval: true
+
+storage:
+  database_url: sqlite:///artifacts/quant_agent.db
+  mlflow_tracking_uri: artifacts/mlruns
+
+paths:
+  raw_data: artifacts/data/raw
+  qlib_data: artifacts/data/qlib/cn_data
+  research_runs: artifacts/research_runs
+  risk_runs: artifacts/risk_runs
+  execution_runs: artifacts/execution_runs
+  reports: artifacts/reports

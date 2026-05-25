@@ -29,12 +29,13 @@ instead.
 
 ## Setup
 
-No package manifest has been committed yet. When implementation starts, follow
-the design and prefer a Python project with `pyproject.toml`, a `Makefile`, and
-the `quant-agent` CLI entry point.
-
-Once those files exist, keep setup commands executable and update this section
-with the exact commands.
+- Use Python `>=3.10,<3.14`.
+- Install development dependencies: `python -m pip install -e .[dev]`.
+- With `uv`, run checks without manually activating a virtual environment:
+  `uv run --python 3.13 --extra dev <command>`.
+- Initialize local artifact directories: `quant-agent init`.
+- Generate sample raw data: `quant-agent data pull --sample`.
+- Convert sample data to the local Qlib layout: `quant-agent data convert`.
 
 ## Checks
 
@@ -44,9 +45,9 @@ summary.
 
 Expected checks after the project scaffold exists:
 
-- `pytest -q`
-- `ruff check src tests`
-- `mypy src`
+- `uv run --python 3.13 --extra dev pytest -q`
+- `uv run --python 3.13 --extra dev ruff check src tests scripts`
+- `uv run --python 3.13 --extra dev mypy src`
 - `make test`
 - `make lint`
 

@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "a-share-quant-agent"
+version = "0.1.0"
+description = "A-share quant research, risk and execution agent"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "pandas>=2",
+  "pydantic>=2",
+  "pyyaml>=6",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "mypy",
+  "pytest",
+  "pytest-cov",
+  "ruff",
+]
+research = [
+  "akshare",
+  "lightgbm",
+  "mlflow",
+  "pyqlib",
+  "scikit-learn",
+  "tushare",
+]
+risk = [
+  "fastapi",
+  "uvicorn",
+]
+execution = [
+  "vnpy",
+]
+
+[project.scripts]
+quant-agent = "quant_agent.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+files = ["src"]
+
+[[tool.mypy.overrides]]
+module = ["pandas.*", "yaml.*"]
+ignore_missing_imports = true
