@@ -1,0 +1,7 @@
+strategies:
+  lgb_alpha158_csi300_v1:
+    owner: quant
+    type: qlib
+    config: configs/research/baseline_lgb_alpha158.yaml
+    risk_profile: default
+    status: active

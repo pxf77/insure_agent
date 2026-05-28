@@ -22,13 +22,13 @@ data-convert:
 	$(PYTHON) scripts/convert_to_qlib.py --config configs/env/dev.yaml
 
 research:
-	@echo "Research phase is not implemented in Phase 0/1"
+	$(PYTHON) scripts/run_qlib_backtest.py --env-config configs/env/dev.yaml
 
 risk:
-	@echo "Risk phase is not implemented in Phase 0/1"
+	$(PYTHON) scripts/validate_targets.py --env-config configs/env/dev.yaml
 
 paper:
-	@echo "Paper trading phase is not implemented in Phase 0/1"
+	$(PYTHON) scripts/run_paper_trading.py --env-config configs/env/dev.yaml
 
 report:
-	@echo "Report phase is not implemented in Phase 0/1"
+	$(PYTHON) scripts/generate_report.py --env-config configs/env/dev.yaml

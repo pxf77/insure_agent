@@ -1,0 +1,5 @@
+execution:
+  mode: paper
+  gateway: mock
+  account_value: 1000000
+  lot_size: 100

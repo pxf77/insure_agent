@@ -1,0 +1,10 @@
+research:
+  strategy_id: lgb_alpha158_csi300_v1
+  universe: CSI300
+  benchmark: SH000300
+  test_start: 2026-05-20
+  test_end: 2026-05-22
+
+portfolio:
+  method: deterministic_momentum
+  topk: 3

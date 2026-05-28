@@ -4,9 +4,9 @@ A-share quantitative research, risk-control, and execution agent scaffold.
 
 The project is being implemented from
 [`technical_design_codex_enriched.md`](technical_design_codex_enriched.md). The
-current codebase covers Phase 0 and Phase 1: project scaffold, configuration,
-CLI, local sample data generation, data validation, symbol normalization, and a
-lightweight local Qlib-style conversion flow.
+current codebase provides a local MVP: deterministic sample data generation,
+Qlib-style conversion, research target generation, risk validation, mock paper
+execution, Markdown reporting, and a `latest.json` artifact index.
 
 ## Architecture
 
@@ -22,17 +22,27 @@ Market data
   -> Reports and audit logs
 ```
 
-Current implementation:
+Implemented modules:
 
 - `src/quant_agent/common`: configuration loading, path handling, and run ID
-  utilities.
+  utilities, including the latest-run artifact index.
 - `src/quant_agent/data`: A-share symbol normalization, daily bar validation,
   local CSV/Parquet adapter, and local Qlib layout conversion.
-- `src/quant_agent/cli.py`: `quant-agent` commands for status, initialization,
-  sample data generation, and data conversion.
+- `src/quant_agent/research`: deterministic local research baseline that writes
+  `metrics.json`, `target_positions.json`, and a research report.
+- `src/quant_agent/risk`: deterministic position-limit and kill-switch rules
+  that write `approved_positions.json`.
+- `src/quant_agent/execution`: mock paper execution bridge that converts
+  approved positions into local orders and trades.
+- `src/quant_agent/schemas`: Pydantic contracts shared by research, risk, and
+  execution layers.
+- `src/quant_agent/cli.py`: `quant-agent` commands for the local MVP workflow.
 - `configs/env/dev.yaml`: default local development configuration.
+- `configs/research`, `configs/risk`, and `configs/execution`: local MVP
+  strategy, risk, and mock execution settings.
 - `scripts/`: thin script wrappers for Makefile and direct command usage.
-- `tests/unit`: unit tests for the current scaffold and data layer.
+- `tests/unit` and `tests/integration`: behavior coverage for contracts,
+  pipeline steps, and the end-to-end local MVP flow.
 
 Runtime outputs are written under `artifacts/` and are ignored by Git.
 
@@ -55,7 +65,20 @@ uv run --python 3.13 --extra dev quant-agent status
 
 ## Quick Start
 
-Initialize local output directories:
+Run the full local paper-mode MVP:
+
+```bash
+uv run --python 3.13 --extra dev quant-agent run pipeline --mode paper
+```
+
+The command runs:
+
+```text
+init -> data pull -> data convert -> research qlib -> risk validate
+     -> paper run -> report generate -> latest
+```
+
+To run each step manually, initialize local output directories:
 
 ```bash
 uv run --python 3.13 --extra dev quant-agent init
@@ -73,6 +96,16 @@ Convert raw sample data into the local Qlib-style layout:
 uv run --python 3.13 --extra dev quant-agent data convert
 ```
 
+Run research, risk validation, mock paper execution, and report generation:
+
+```bash
+uv run --python 3.13 --extra dev quant-agent research qlib
+uv run --python 3.13 --extra dev quant-agent risk validate
+uv run --python 3.13 --extra dev quant-agent paper run
+uv run --python 3.13 --extra dev quant-agent report generate
+uv run --python 3.13 --extra dev quant-agent latest
+```
+
 Expected generated files:
 
 ```text
@@ -80,6 +113,13 @@ artifacts/data/raw/daily_bar.csv
 artifacts/data/qlib/cn_data/features/*.csv
 artifacts/data/qlib/cn_data/instruments/all_a.txt
 artifacts/data/qlib/cn_data/metadata.json
+artifacts/research_runs/<run_id>/target_positions.json
+artifacts/research_runs/<run_id>/metrics.json
+artifacts/risk_runs/<run_id>/approved_positions.json
+artifacts/execution_runs/<run_id>/orders.json
+artifacts/execution_runs/<run_id>/trades.json
+artifacts/reports/<run_id>_report.md
+artifacts/latest.json
 ```
 
 ## CLI Commands
@@ -89,6 +129,13 @@ quant-agent status
 quant-agent init
 quant-agent data pull --sample
 quant-agent data convert
+quant-agent research qlib
+quant-agent risk validate
+quant-agent paper run
+quant-agent report generate
+quant-agent report latest
+quant-agent latest
+quant-agent run pipeline --mode paper
 ```
 
 Equivalent Makefile entry points:
@@ -97,6 +144,10 @@ Equivalent Makefile entry points:
 make init
 make data-pull
 make data-convert
+make research
+make risk
+make paper
+make report
 ```
 
 If using `uv`, make sure the generated virtual environment is on `PATH` before
@@ -123,6 +174,8 @@ This repository must not enable real trading by default.
 
 - Real broker integration is not implemented in the current phase.
 - `live` trading must remain disabled unless explicitly configured and reviewed.
+- Creating `artifacts/KILL_SWITCH` causes `quant-agent risk validate` to reject
+  targets and exit with a non-zero status.
 - Do not commit secrets, API keys, broker credentials, `.env` files, or runtime
   outputs.
 - LLM-assisted logic must not bypass deterministic risk rules.
@@ -132,5 +185,8 @@ This repository must not enable real trading by default.
 - [`AGENTS.md`](AGENTS.md): coding-agent operating rules.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): Git commit convention and contribution
   rules.
+- [`docs/runbook.md`](docs/runbook.md): local MVP runbook.
+- [`docs/live_trading_checklist.md`](docs/live_trading_checklist.md): future
+  live-trading guardrails.
 - [`technical_design_codex_enriched.md`](technical_design_codex_enriched.md):
   detailed architecture and phased implementation plan.
