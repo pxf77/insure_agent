@@ -1,0 +1,26 @@
+suite_version: "0.3"
+cases:
+  - id: research-feature-lag-prevents-same-day-leakage
+    action: feature_lag
+    tags: [research, leakage, adversarial]
+    severity: critical
+
+  - id: research-identical-run-is-deterministic
+    action: deterministic_run
+    tags: [research, reproducibility]
+    severity: critical
+
+  - id: research-costs-reduce-net-return
+    action: cost_monotonicity
+    tags: [research, costs]
+    severity: critical
+
+  - id: research-target-portfolio-obeys-contract
+    action: target_constraints
+    tags: [research, portfolio]
+    severity: critical
+
+  - id: research-rejects-tampered-snapshot
+    action: snapshot_tamper
+    tags: [research, snapshot, adversarial]
+    severity: critical

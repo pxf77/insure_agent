@@ -11,14 +11,18 @@ from quant_agent.common.config import load_app_config
 from quant_agent.common.doctor import DoctorProfile, render_doctor_report, run_doctor
 from quant_agent.common.paths import ProjectPaths
 from quant_agent.common.run_index import RunIndex
+from quant_agent.data.providers.base import MarketDataProvider
 from quant_agent.data.providers.synthetic import SyntheticMarketDataProvider
+from quant_agent.data.providers.synthetic_research import SyntheticResearchMarketDataProvider
 from quant_agent.data.qlib_converter import QlibConverter
 from quant_agent.data.snapshot import SnapshotBuilder
 from quant_agent.evals.contracts import render_contract_eval_report, run_contract_evals
 from quant_agent.evals.data import render_data_eval_report, run_data_evals
+from quant_agent.evals.research import render_research_eval_report, run_research_evals
 from quant_agent.execution.order_router import PaperTradingRunner
 from quant_agent.research.qlib_runner import QlibRunner
 from quant_agent.research.report_writer import ReportWriter
+from quant_agent.research.snapshot_runner import SnapshotResearchRunner
 from quant_agent.risk.engine import RiskEngine
 from quant_agent.risk.reports import summarize_risk_decision
 from quant_agent.schemas.exporter import export_contract_schemas
@@ -58,6 +62,14 @@ def _parse_datetime(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise typer.BadParameter(f"invalid ISO-8601 datetime: {value}") from exc
+
+
+def _market_data_provider(name: str) -> MarketDataProvider:
+    if name == "synthetic":
+        return SyntheticMarketDataProvider()
+    if name == "synthetic-research":
+        return SyntheticResearchMarketDataProvider()
+    raise typer.BadParameter("provider must be one of: synthetic, synthetic-research")
 
 
 @app.command()
@@ -149,6 +161,22 @@ def eval_data_command(
         raise typer.Exit(1)
 
 
+@eval_app.command("research")
+def eval_research_command(
+    suite: Path = Path("evals/research/v0.3.yaml"),
+    config: Path = Path("configs/research/snapshot_baseline.yaml"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run the reproducibility and leakage research evaluation suite."""
+    report = run_research_evals(suite, config_path=config)
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        typer.echo(render_research_eval_report(report))
+    if not report.success:
+        raise typer.Exit(1)
+
+
 @data_app.command("pull")
 def data_pull(
     sample: bool = typer.Option(False, "--sample", help="Generate deterministic sample data."),
@@ -206,23 +234,25 @@ def data_snapshot(
         "2026-05-22T16:00:00+08:00",
         help="Point-in-time cutoff as an aware ISO-8601 datetime.",
     ),
-    provider: str = typer.Option("synthetic", help="Provider name; currently synthetic only."),
+    provider: str = typer.Option(
+        "synthetic",
+        help="Provider: synthetic or synthetic-research.",
+    ),
     config: Path = Path("configs/env/dev.yaml"),
     project_root: Path = Path("."),
 ) -> None:
     """Build an immutable point-in-time daily-bar snapshot."""
-    if provider != "synthetic":
-        raise typer.BadParameter("only the synthetic provider is enabled in this phase")
     paths, _, _ = _load_paths(config, project_root)
     result = SnapshotBuilder(
         snapshot_root=paths.artifact_dir / "data" / "snapshots"
     ).build_daily_bars(
-        SyntheticMarketDataProvider(),
+        _market_data_provider(provider),
         as_of=_parse_datetime(as_of),
     )
     action = "reused" if result.reused else "created"
     typer.echo(f"snapshot {action}: {result.manifest.snapshot_id}")
     typer.echo(f"visible_rows: {result.manifest.visible_rows}")
+    typer.echo(f"snapshot_dir: {result.snapshot_dir}")
     typer.echo(f"manifest.json: {result.manifest_path}")
 
 
@@ -246,7 +276,7 @@ def research_qlib(
     env_config: Path = Path("configs/env/dev.yaml"),
     project_root: Path = Path("."),
 ) -> None:
-    """Run deterministic local research baseline and generate target positions."""
+    """Run deterministic local v1 research and generate target positions."""
     paths, _, _ = _load_paths(env_config, project_root)
     result = QlibRunner(
         config_path=config,
@@ -255,6 +285,27 @@ def research_qlib(
     ).run_backtest()
     typer.echo(f"research_run: {result.run_id}")
     typer.echo(f"target_positions.json: {result.target_positions_path}")
+    typer.echo(f"metrics.json: {result.metrics_path}")
+
+
+@research_app.command("snapshot")
+def research_snapshot(
+    snapshot: Path = typer.Option(..., "--snapshot", help="Verified snapshot directory."),
+    config: Path = Path("configs/research/snapshot_baseline.yaml"),
+    env_config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Run the reproducible v2 snapshot-backed research baseline."""
+    paths, _, _ = _load_paths(env_config, project_root)
+    result = SnapshotResearchRunner(
+        snapshot_dir=snapshot,
+        config_path=config,
+        artifact_root=paths.artifact_dir,
+    ).run()
+    action = "reused" if result.reused else "created"
+    typer.echo(f"research {action}: {result.run_id}")
+    typer.echo(f"artifact_dir: {result.artifact_dir}")
+    typer.echo(f"target_portfolio.json: {result.target_portfolio_path}")
     typer.echo(f"metrics.json: {result.metrics_path}")
 
 
