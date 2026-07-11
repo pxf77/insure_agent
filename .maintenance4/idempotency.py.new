@@ -1,0 +1,248 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import time
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+from enum import Enum
+from pathlib import Path
+from typing import Iterator
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from quant_agent.execution.v2_models import ExecutionIntent
+from quant_agent.schemas.v2.primitives import AwareDateTime
+
+
+class ReservationStatus(str, Enum):
+    PENDING = "PENDING"
+    COMMITTED = "COMMITTED"
+
+
+class IdempotencyInProgress(RuntimeError):
+    pass
+
+
+class IdempotencyRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    idempotency_key: str
+    order_id: UUID
+    intent_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    status: ReservationStatus
+    lease_id: UUID | None = None
+    lease_expires_at: AwareDateTime | None = None
+    artifact_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+
+class IdempotencyState(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "2.0"
+    records: list[IdempotencyRecord] = Field(default_factory=list)
+
+
+class IdempotencyClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: UUID
+    reused: bool
+    recovered: bool
+    lease_id: UUID | None = None
+
+
+class IdempotencyStore:
+    """Serialized reservation/commit ledger with bounded lease recovery."""
+
+    def __init__(
+        self,
+        path: str | Path,
+        *,
+        lock_timeout_seconds: float = 5.0,
+        lease_seconds: int = 60,
+    ):
+        self.path = Path(path)
+        self.lock_path = self.path.with_name(f"{self.path.name}.lock")
+        self.lock_timeout_seconds = lock_timeout_seconds
+        self.lease_seconds = lease_seconds
+
+    def claim(
+        self,
+        intent: ExecutionIntent,
+        *,
+        now: datetime | None = None,
+    ) -> IdempotencyClaim:
+        timestamp = now or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            raise ValueError("idempotency claim time must be timezone-aware")
+        intent_hash = self._intent_hash(intent)
+        order_id = uuid5(NAMESPACE_URL, f"order:{intent.idempotency_key}")
+        with self._locked():
+            state = self._read_unlocked()
+            existing = next(
+                (
+                    record
+                    for record in state.records
+                    if record.idempotency_key == intent.idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.intent_sha256 != intent_hash or existing.order_id != order_id:
+                    raise ValueError("idempotency key is already bound to a different intent")
+                if existing.status == ReservationStatus.COMMITTED:
+                    return IdempotencyClaim(order_id=order_id, reused=True, recovered=False)
+                if (
+                    existing.lease_expires_at is not None
+                    and timestamp < existing.lease_expires_at
+                ):
+                    raise IdempotencyInProgress(
+                        f"idempotency reservation is active until {existing.lease_expires_at}"
+                    )
+                recovered = True
+            else:
+                recovered = False
+
+            lease_id = uuid4()
+            pending = IdempotencyRecord(
+                idempotency_key=intent.idempotency_key,
+                order_id=order_id,
+                intent_sha256=intent_hash,
+                status=ReservationStatus.PENDING,
+                lease_id=lease_id,
+                lease_expires_at=timestamp + timedelta(seconds=self.lease_seconds),
+            )
+            records = [
+                item
+                for item in state.records
+                if item.idempotency_key != intent.idempotency_key
+            ]
+            records.append(pending)
+            records.sort(key=lambda item: item.idempotency_key)
+            self._write_unlocked(IdempotencyState(records=records))
+            return IdempotencyClaim(
+                order_id=order_id,
+                reused=False,
+                recovered=recovered,
+                lease_id=lease_id,
+            )
+
+    def commit(
+        self,
+        *,
+        idempotency_key: str,
+        lease_id: UUID,
+        artifact_sha256: str,
+    ) -> IdempotencyRecord:
+        with self._locked():
+            state = self._read_unlocked()
+            existing = next(
+                (
+                    record
+                    for record in state.records
+                    if record.idempotency_key == idempotency_key
+                ),
+                None,
+            )
+            if existing is None:
+                raise ValueError("cannot commit unknown idempotency key")
+            if existing.status == ReservationStatus.COMMITTED:
+                if existing.artifact_sha256 != artifact_sha256:
+                    raise ValueError("committed idempotency artifact hash mismatch")
+                return existing
+            if existing.lease_id != lease_id:
+                raise ValueError("idempotency commit lease does not match active reservation")
+            committed = existing.model_copy(
+                update={
+                    "status": ReservationStatus.COMMITTED,
+                    "lease_id": None,
+                    "lease_expires_at": None,
+                    "artifact_sha256": artifact_sha256,
+                }
+            )
+            records = [
+                committed if item.idempotency_key == idempotency_key else item
+                for item in state.records
+            ]
+            self._write_unlocked(IdempotencyState(records=records))
+            return committed
+
+    def record_for(self, idempotency_key: str) -> IdempotencyRecord | None:
+        return next(
+            (
+                record
+                for record in self.read().records
+                if record.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def read(self) -> IdempotencyState:
+        return self._read_unlocked()
+
+    @staticmethod
+    def _intent_hash(intent: ExecutionIntent) -> str:
+        content = (
+            json.dumps(
+                intent.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        ).encode("utf-8")
+        return hashlib.sha256(content).hexdigest()
+
+    def _read_unlocked(self) -> IdempotencyState:
+        if not self.path.exists():
+            return IdempotencyState()
+        if self.path.is_symlink() or not self.path.is_file():
+            raise ValueError("idempotency state path is unsafe")
+        return IdempotencyState.model_validate_json(self.path.read_text(encoding="utf-8"))
+
+    def _write_unlocked(self, state: IdempotencyState) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists() and self.path.is_symlink():
+            raise ValueError("idempotency state path is unsafe")
+        temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(
+                state.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.path)
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.lock_timeout_seconds
+        descriptor: int | None = None
+        while descriptor is None:
+            try:
+                descriptor = os.open(
+                    self.lock_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("timed out waiting for idempotency lock")
+                time.sleep(0.02)
+        try:
+            os.write(descriptor, str(os.getpid()).encode("ascii"))
+            yield
+        finally:
+            os.close(descriptor)
+            try:
+                self.lock_path.unlink()
+            except FileNotFoundError:
+                pass
