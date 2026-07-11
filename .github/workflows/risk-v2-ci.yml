@@ -1,0 +1,54 @@
+name: Risk v2 CI
+
+on:
+  pull_request:
+    paths:
+      - "src/quant_agent/risk/**"
+      - "src/quant_agent/evals/risk.py"
+      - "evals/risk/**"
+      - "configs/risk/**"
+      - "tests/unit/test_risk_v2*.py"
+      - "tests/unit/test_risk_evals.py"
+      - ".github/workflows/risk-v2-ci.yml"
+  push:
+    branches:
+      - codex/qta-080-risk-v2
+
+permissions:
+  contents: read
+
+jobs:
+  risk-v2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install project
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run risk tests
+        run: |
+          pytest -q tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py
+
+      - name: Run risk evaluation suite
+        run: python -m quant_agent.evals.risk evals/risk/v0.4.yaml
+
+      - name: Run static checks
+        run: |
+          ruff check src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py
+          mypy src
