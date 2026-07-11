@@ -1,0 +1,101 @@
+name: Risk v2 review-fix maintenance
+
+on:
+  push:
+    branches: [codex/qta-080-risk-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/qta-080-risk-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install formatter
+        run: python -m pip install ruff
+      - name: Apply adversarial review fixes
+        run: |
+          cp .maintenance2/risk_v2_models.py.new src/quant_agent/risk/v2_models.py
+          cp .maintenance2/kill_switch_store.py.new src/quant_agent/risk/kill_switch_store.py
+          cp .maintenance2/risk_v2_engine.py.new src/quant_agent/risk/v2_engine.py
+          cp .maintenance2/risk_v2_service_final.py.new src/quant_agent/risk/v2_service.py
+          cp .maintenance2/risk_eval.py.new src/quant_agent/evals/risk.py
+          cp .maintenance2/risk_eval_v04.yaml.new evals/risk/v0.4.yaml
+          python - <<'PY'
+          from pathlib import Path
+
+          approval = '''"approval": {
+                    "approval_id": "11111111-1111-4111-8111-111111111111",
+                    "status": "APPROVED",
+                    "account_id": "paper",
+                    "strategy_id": "risk-unit-strategy",
+                    "target_run_id": "risk-unit",
+                    "policy_version": "unit-v1",
+                    "approved_at": "2026-05-22T23:00:00Z",
+                    "expires_at": "2026-05-23T01:00:00Z",
+                    "approvers": ["risk-officer"],
+                },'''
+          path = Path('tests/unit/test_risk_v2.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace('from uuid import UUID\n\n', '')
+          text = text.replace(
+              '"approval_id": str(UUID("11111111-1111-4111-8111-111111111111")),',
+              approval,
+          )
+          path.write_text(text, encoding='utf-8')
+
+          service_approval = '''"approval": {
+                    "approval_id": "11111111-1111-4111-8111-111111111111",
+                    "status": "APPROVED",
+                    "account_id": "paper",
+                    "strategy_id": "service-strategy",
+                    "target_run_id": "service-run",
+                    "policy_version": "service-v1",
+                    "approved_at": "2026-05-22T23:00:00Z",
+                    "expires_at": "2026-05-23T01:00:00Z",
+                    "approvers": ["risk-officer"],
+                },'''
+          path = Path('tests/unit/test_risk_v2_service.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '"approval_id": "11111111-1111-4111-8111-111111111111",',
+              service_approval,
+          )
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('tests/unit/test_risk_evals.py')
+          text = path.read_text(encoding='utf-8').replace('== 18', '== 24')
+          path.write_text(text, encoding='utf-8')
+
+          path = Path('.github/workflows/risk-v2-ci.yml')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'tests/unit/test_risk_evals.py',
+              'tests/unit/test_risk_evals.py tests/unit/test_risk_v2_adversarial.py',
+          )
+          text = text.replace(
+              'python -m quant_agent.evals.risk evals/risk/v0.4.yaml',
+              'python scripts/run_risk_evals.py evals/risk/v0.4.yaml',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -rf .maintenance2
+          rm .github/workflows/risk-v2-review-maintenance.yml
+          ruff check --fix src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py tests/unit/test_risk_v2_adversarial.py scripts/run_risk_evals.py
+          ruff format src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py tests/unit/test_risk_v2_adversarial.py scripts/run_risk_evals.py
+      - name: Commit fixes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(risk): bind approvals and serialize kill switches"
+          git push origin HEAD:codex/qta-080-risk-v2

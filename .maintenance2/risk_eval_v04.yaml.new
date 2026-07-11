@@ -1,0 +1,178 @@
+suite_version: "0.4"
+cases:
+  - id: risk-baseline-approved
+    action: approve
+    expected_decision: APPROVE
+    expected_reason_codes: [DATA_FRESH, NO_KILL_SWITCH, DAILY_LOSS_OK, DRAWDOWN_OK, APPROVAL_OK, PORTFOLIO_LIMITS_OK]
+    tags: [risk, baseline]
+    severity: critical
+
+  - id: risk-single-position-adjusted
+    action: single_weight
+    expected_decision: ADJUST
+    expected_reason_codes: [MAX_SINGLE_WEIGHT]
+    expected_weights: {600519.SH: "0.20"}
+    tags: [risk, concentration]
+    severity: critical
+
+  - id: risk-total-position-adjusted
+    action: total_weight
+    expected_decision: ADJUST
+    expected_reason_codes: [MAX_TOTAL_WEIGHT]
+    expected_weights: {600519.SH: "0.12", 000001.SZ: "0.12", 300750.SZ: "0.12"}
+    tags: [risk, total-weight]
+    severity: critical
+
+  - id: risk-industry-position-adjusted
+    action: industry_weight
+    expected_decision: ADJUST
+    expected_reason_codes: [MAX_INDUSTRY_WEIGHT]
+    expected_weights: {600519.SH: "0.12", 000858.SZ: "0.16"}
+    tags: [risk, industry]
+    severity: critical
+
+  - id: risk-liquidity-adjusted
+    action: liquidity
+    expected_decision: ADJUST
+    expected_reason_codes: [LIQUIDITY_CAP]
+    expected_weights: {600519.SH: "0.10"}
+    tags: [risk, liquidity]
+    severity: critical
+
+  - id: risk-t-plus-one-adjusted
+    action: t_plus_one
+    expected_decision: ADJUST
+    expected_reason_codes: [T_PLUS_ONE_SELL_LIMIT]
+    expected_weights: {600519.SH: "0.15"}
+    tags: [risk, a-share, t-plus-one]
+    severity: critical
+
+  - id: risk-suspended-adjusted
+    action: suspended
+    expected_decision: ADJUST
+    expected_reason_codes: [SUSPENDED]
+    expected_weights: {600519.SH: "0.10"}
+    tags: [risk, tradability]
+    severity: critical
+
+  - id: risk-st-buy-adjusted
+    action: st_buy
+    expected_decision: ADJUST
+    expected_reason_codes: [ST_BUY_BLOCKED]
+    expected_weights: {600519.SH: "0.10"}
+    tags: [risk, st]
+    severity: critical
+
+  - id: risk-limit-up-buy-adjusted
+    action: limit_up
+    expected_decision: ADJUST
+    expected_reason_codes: [LIMIT_UP_BUY_BLOCKED]
+    expected_weights: {600519.SH: "0.10"}
+    tags: [risk, limit-up]
+    severity: critical
+
+  - id: risk-limit-down-sell-adjusted
+    action: limit_down
+    expected_decision: ADJUST
+    expected_reason_codes: [LIMIT_DOWN_SELL_BLOCKED]
+    expected_weights: {600519.SH: "0.10"}
+    tags: [risk, limit-down]
+    severity: critical
+
+  - id: risk-stale-data-rejected
+    action: stale_data
+    expected_decision: REJECT
+    expected_reason_codes: [STALE_DATA]
+    tags: [risk, freshness]
+    severity: critical
+
+  - id: risk-future-snapshot-rejected
+    action: future_snapshot
+    expected_decision: REJECT
+    expected_reason_codes: [SNAPSHOT_FROM_FUTURE]
+    tags: [risk, pit]
+    severity: critical
+
+  - id: risk-missing-approval-rejected
+    action: missing_approval
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_REQUIRED]
+    tags: [risk, approval]
+    severity: critical
+
+  - id: risk-approval-scope-mismatch-rejected
+    action: approval_scope_mismatch
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_SCOPE_MISMATCH]
+    tags: [risk, approval, adversarial]
+    severity: critical
+
+  - id: risk-expired-approval-rejected
+    action: approval_expired
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_EXPIRED]
+    tags: [risk, approval, expiration]
+    severity: critical
+
+  - id: risk-future-approval-rejected
+    action: approval_future
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_FROM_FUTURE]
+    tags: [risk, approval, adversarial]
+    severity: critical
+
+  - id: risk-daily-loss-rejected
+    action: daily_loss
+    expected_decision: REJECT
+    expected_reason_codes: [DAILY_LOSS_LIMIT]
+    tags: [risk, loss]
+    severity: critical
+
+  - id: risk-drawdown-rejected
+    action: drawdown
+    expected_decision: REJECT
+    expected_reason_codes: [DRAWDOWN_LIMIT]
+    tags: [risk, drawdown]
+    severity: critical
+
+  - id: risk-hard-kill-switch-rejected
+    action: hard_kill_switch
+    expected_decision: REJECT
+    expected_reason_codes: [KILL_SWITCH_ACTIVE]
+    tags: [risk, kill-switch]
+    severity: critical
+
+  - id: risk-reduce-only-blocks-increase
+    action: reduce_only
+    expected_decision: ADJUST
+    expected_reason_codes: [REDUCE_ONLY]
+    expected_weights: {600519.SH: "0.10"}
+    tags: [risk, kill-switch, reduce-only]
+    severity: critical
+
+  - id: risk-missing-instrument-context-rejected
+    action: missing_instrument_context
+    expected_decision: REJECT
+    expected_reason_codes: [MISSING_INSTRUMENT_CONTEXT]
+    tags: [risk, fail-closed]
+    severity: critical
+
+  - id: risk-duplicate-context-invalid
+    action: duplicate_context
+    expected_error: "duplicate instrument states"
+    tags: [risk, input-validation]
+    severity: critical
+
+  - id: risk-strategy-mismatch-rejected
+    action: strategy_mismatch
+    expected_decision: REJECT
+    expected_reason_codes: [STRATEGY_CONTEXT_MISMATCH]
+    tags: [risk, context]
+    severity: critical
+
+  - id: risk-infeasible-total-floor-rejected
+    action: infeasible_total_floor
+    expected_decision: REJECT
+    expected_reason_codes: [INFEASIBLE_MAX_TOTAL_WEIGHT]
+    tags: [risk, floor, adversarial]
+    severity: critical
