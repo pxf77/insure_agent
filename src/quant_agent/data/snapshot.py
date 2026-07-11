@@ -6,7 +6,7 @@ import os
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Literal
+from typing import Literal, cast
 from uuid import uuid4
 
 import pandas as pd
@@ -100,11 +100,15 @@ def _sha256(content: bytes) -> str:
 
 
 def _canonical_csv(frame: pd.DataFrame) -> bytes:
-    return frame.to_csv(
-        index=False,
-        lineterminator="\n",
-        float_format="%.10g",
-    ).encode("utf-8")
+    text = cast(
+        str,
+        frame.to_csv(
+            index=False,
+            lineterminator="\n",
+            float_format="%.10g",
+        ),
+    )
+    return text.encode("utf-8")
 
 
 def _canonical_raw_daily_bars(frame: pd.DataFrame) -> pd.DataFrame:
