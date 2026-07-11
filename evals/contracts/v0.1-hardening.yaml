@@ -1,0 +1,106 @@
+suite_version: "0.1-hardening"
+cases:
+  - id: event-correlation-required
+    model: event-envelope-1.0
+    payload:
+      event_type: "risk.completed"
+      occurred_at: "2026-07-11T01:00:00Z"
+      producer: "risk-service"
+      payload: {}
+    expect_valid: false
+    error_contains: "correlation_id"
+    tags: [event, audit, adversarial]
+    severity: critical
+
+  - id: portfolio-duplicate-rank
+    model: target-portfolio-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      trade_date: "2026-07-10"
+      generated_at: "2026-07-10T07:10:00Z"
+      universe: "CSI300"
+      positions:
+        - {instrument: "600519.SH", target_weight: "0.20", score: "1.2", rank: 1}
+        - {instrument: "000001.SZ", target_weight: "0.15", score: "0.9", rank: 1}
+    expect_valid: false
+    error_contains: "duplicate ranks"
+    tags: [portfolio, audit, adversarial]
+    severity: critical
+
+  - id: risk-rejection-requires-reason
+    model: risk-decision-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      policy_version: "paper-v1"
+      decision: "REJECT"
+      approved: false
+      decided_at: "2026-07-10T07:11:00Z"
+      positions: []
+      rule_results: []
+    expect_valid: false
+    error_contains: "requires at least one REJECT"
+    tags: [risk, audit, adversarial]
+    severity: critical
+
+  - id: risk-rejection-with-reason
+    model: risk-decision-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      policy_version: "paper-v1"
+      decision: "REJECT"
+      approved: false
+      decided_at: "2026-07-10T07:11:00Z"
+      positions: []
+      rule_results:
+        - rule_id: "kill-switch"
+          rule_version: "1"
+          outcome: "REJECT"
+          reason_code: "KILL_SWITCH_ACTIVE"
+          message: "global kill switch is active"
+    expect_valid: true
+    tags: [risk, audit]
+    severity: critical
+
+  - id: risk-approve-cannot-carry-adjustment
+    model: risk-decision-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      policy_version: "paper-v1"
+      decision: "APPROVE"
+      approved: true
+      decided_at: "2026-07-10T07:11:00Z"
+      positions:
+        - {instrument: "600519.SH", target_weight: "0.10", adjusted: true, reason_code: "MAX_WEIGHT"}
+      rule_results:
+        - rule_id: "position-limit"
+          rule_version: "1"
+          outcome: "ADJUST"
+          reason_code: "MAX_WEIGHT"
+          message: "weight adjusted"
+    expect_valid: false
+    error_contains: "approved decision cannot contain adjustments"
+    tags: [risk, consistency, adversarial]
+    severity: critical
+
+  - id: order-client-cannot-weaken-lot-size
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "run-1:600519:bypass"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "BUY"
+      order_type: "LIMIT"
+      quantity: 50
+      lot_size: 1
+      limit_price: "1500.50"
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: false
+    error_contains: "Input should be 100"
+    tags: [order, lot, bypass, adversarial]
+    severity: critical
