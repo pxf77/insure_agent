@@ -1,4 +1,4 @@
-.PHONY: doctor init install test lint data-pull data-convert research risk paper report
+.PHONY: doctor contracts-export eval-contracts init install test lint data-pull data-convert research risk paper report
 
 PYTHON ?= python
 
@@ -7,6 +7,12 @@ install:
 
 doctor:
 	$(PYTHON) -m quant_agent.cli doctor --profile mvp --config configs/env/dev.yaml
+
+contracts-export:
+	$(PYTHON) -m quant_agent.cli contracts export --output artifacts/contracts
+
+eval-contracts:
+	$(PYTHON) -m quant_agent.cli eval contracts --suite evals/contracts/v0.1.yaml
 
 init:
 	$(PYTHON) scripts/init_project.py --config configs/env/dev.yaml
