@@ -86,6 +86,9 @@ class TargetPortfolio(BaseModel):
         instruments = [str(position.instrument) for position in self.positions]
         if len(instruments) != len(set(instruments)):
             raise ValueError("target portfolio contains duplicate instruments")
+        ranks = [position.rank for position in self.positions]
+        if len(ranks) != len(set(ranks)):
+            raise ValueError("target portfolio contains duplicate ranks")
         total_weight = sum(
             (position.target_weight for position in self.positions),
             start=Decimal("0"),
@@ -146,14 +149,27 @@ class RiskDecisionV2(BaseModel):
 
     @model_validator(mode="after")
     def validate_decision_consistency(self) -> RiskDecisionV2:
+        outcomes = {result.outcome for result in self.rule_results}
         if self.decision == RiskDecisionType.REJECT:
             if self.approved or self.positions:
                 raise ValueError("rejected decision cannot be approved or contain positions")
-        elif not self.approved:
+            if RuleOutcome.REJECT not in outcomes:
+                raise ValueError("rejected decision requires at least one REJECT rule result")
+            return self
+
+        if not self.approved:
             raise ValueError("approved or adjusted decision must set approved=true")
-        if self.decision == RiskDecisionType.ADJUST and not any(
-            result.outcome == RuleOutcome.ADJUST for result in self.rule_results
-        ):
+        if RuleOutcome.REJECT in outcomes:
+            raise ValueError("non-rejected decision cannot contain a REJECT rule result")
+
+        if self.decision == RiskDecisionType.APPROVE:
+            if RuleOutcome.ADJUST in outcomes or any(position.adjusted for position in self.positions):
+                raise ValueError("approved decision cannot contain adjustments")
+            return self
+
+        if not self.positions:
+            raise ValueError("adjusted decision requires approved positions")
+        if RuleOutcome.ADJUST not in outcomes:
             raise ValueError("adjusted decision requires at least one ADJUST rule result")
         return self
 
@@ -189,7 +205,7 @@ class OrderIntent(BaseModel):
     side: OrderSide
     order_type: OrderType
     quantity: PositiveQuantity
-    lot_size: int = Field(default=100, gt=0)
+    lot_size: Literal[100] = 100
     limit_price: Price | None = None
     time_in_force: TimeInForce = TimeInForce.DAY
     approval_id: UUID | None = None
