@@ -13,8 +13,8 @@ def test_data_eval_suite_v02_passes() -> None:
     report = run_data_evals(Path("evals/data/v0.2.yaml"))
 
     assert report.success
-    assert report.total == 9
-    assert report.passed == 9
+    assert report.total == 15
+    assert report.passed == 15
     assert report.failed == 0
 
 
@@ -27,7 +27,7 @@ def test_data_eval_cli_emits_json() -> None:
     assert result.exit_code == 0, result.output
     payload = json.loads(result.stdout)
     assert payload["suite_version"] == "0.2"
-    assert payload["total"] == 9
+    assert payload["total"] == 15
     assert payload["failed"] == 0
 
 
