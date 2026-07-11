@@ -77,7 +77,10 @@ def _check_platform(profile: DoctorProfile) -> DoctorCheck:
     remediation = None
     if profile == DoctorProfile.EXECUTION and system == "darwin":
         status = CheckStatus.WARN
-        message = "macOS supports paper execution, but broker gateways may require Linux/Windows."
+        message = (
+            "macOS supports paper and gateway-development checks, but not production "
+            "broker readiness."
+        )
         remediation = "Use a dedicated Linux or Windows host before live gateway validation."
     return DoctorCheck(
         check_id="platform",
@@ -105,39 +108,22 @@ def _check_timezone(config: AppConfig) -> DoctorCheck:
     )
 
 
-def _check_live_safety(config: AppConfig, profile: DoctorProfile) -> DoctorCheck:
+def _check_live_safety(config: AppConfig, _profile: DoctorProfile) -> DoctorCheck:
     if not config.runtime.allow_live_trading:
         return DoctorCheck(
             check_id="live_trading_safety",
             status=CheckStatus.PASS,
             message="Live trading is disabled.",
         )
-    if config.app.env != "live":
-        return DoctorCheck(
-            check_id="live_trading_safety",
-            status=CheckStatus.FAIL,
-            message=f"Live trading is enabled in non-live environment {config.app.env!r}.",
-            remediation="Set runtime.allow_live_trading=false for dev/research/paper environments.",
-        )
-    if profile != DoctorProfile.EXECUTION:
-        return DoctorCheck(
-            check_id="live_trading_safety",
-            status=CheckStatus.FAIL,
-            message="Live trading configuration requires the execution doctor profile.",
-            remediation="Run with --profile execution after completing live-readiness review.",
-        )
-    if not config.runtime.require_manual_approval:
-        return DoctorCheck(
-            check_id="live_trading_safety",
-            status=CheckStatus.FAIL,
-            message="Live trading is enabled without manual approval.",
-            remediation="Set runtime.require_manual_approval=true.",
-        )
     return DoctorCheck(
         check_id="live_trading_safety",
-        status=CheckStatus.WARN,
-        message="Live trading is enabled; this command does not certify broker readiness.",
-        remediation="Complete the live-trading checklist and two-person approval before use.",
+        status=CheckStatus.FAIL,
+        message="Live trading is not implemented or certified in the current project phase.",
+        remediation=(
+            "Set runtime.allow_live_trading=false. Enablement is blocked until the M9 "
+            "live-readiness review, broker integration, two-person approval, audit logging, "
+            "and kill-switch controls are implemented."
+        ),
     )
 
 
