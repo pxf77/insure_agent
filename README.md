@@ -8,6 +8,10 @@ current codebase provides a local MVP: deterministic sample data generation,
 Qlib-style conversion, research target generation, risk validation, mock paper
 execution, Markdown reporting, and a `latest.json` artifact index.
 
+The phased delivery plan is maintained in
+[`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Repository
+integration decisions are recorded under [`docs/adr`](docs/adr).
+
 ## Architecture
 
 The target system is intentionally split into independent layers:
@@ -24,8 +28,8 @@ Market data
 
 Implemented modules:
 
-- `src/quant_agent/common`: configuration loading, path handling, and run ID
-  utilities, including the latest-run artifact index.
+- `src/quant_agent/common`: configuration loading, path handling, run ID
+  utilities, including the latest-run artifact index and environment doctor.
 - `src/quant_agent/data`: A-share symbol normalization, daily bar validation,
   local CSV/Parquet adapter, and local Qlib layout conversion.
 - `src/quant_agent/research`: deterministic local research baseline that writes
@@ -62,6 +66,30 @@ Or run commands through `uv` without manually managing a virtual environment:
 ```bash
 uv run --python 3.13 --extra dev quant-agent status
 ```
+
+## Environment Doctor
+
+Run the doctor before the first pipeline execution:
+
+```bash
+uv run --python 3.13 --extra dev quant-agent doctor --profile mvp
+```
+
+The command validates Python/platform support, configuration, timezone,
+artifact-directory writability, live-trading safety defaults, command-line
+tools, and optional Qlib/RD-Agent/vn.py dependencies. Missing optional modules
+are warnings in the `mvp` profile.
+
+Use stricter profiles when preparing research or execution environments:
+
+```bash
+quant-agent doctor --profile research
+quant-agent doctor --profile execution
+quant-agent doctor --profile mvp --json
+```
+
+A failed safety or required-dependency check exits non-zero. The doctor does not
+certify a machine for real-money trading.
 
 ## Quick Start
 
@@ -126,6 +154,7 @@ artifacts/latest.json
 
 ```bash
 quant-agent status
+quant-agent doctor --profile mvp
 quant-agent init
 quant-agent data pull --sample
 quant-agent data convert
@@ -141,6 +170,7 @@ quant-agent run pipeline --mode paper
 Equivalent Makefile entry points:
 
 ```bash
+make doctor
 make init
 make data-pull
 make data-convert
@@ -185,6 +215,8 @@ This repository must not enable real trading by default.
 - [`AGENTS.md`](AGENTS.md): coding-agent operating rules.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md): Git commit convention and contribution
   rules.
+- [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md): phased GitHub and
+  Codex delivery plan.
 - [`docs/runbook.md`](docs/runbook.md): local MVP runbook.
 - [`docs/live_trading_checklist.md`](docs/live_trading_checklist.md): future
   live-trading guardrails.

@@ -7,6 +7,7 @@ import pandas as pd
 import typer
 
 from quant_agent.common.config import load_app_config
+from quant_agent.common.doctor import DoctorProfile, render_doctor_report, run_doctor
 from quant_agent.common.paths import ProjectPaths
 from quant_agent.common.run_index import RunIndex
 from quant_agent.data.qlib_converter import QlibConverter
@@ -51,6 +52,33 @@ def status(config: Path = Path("configs/env/dev.yaml")) -> None:
     typer.echo(f"artifact_dir: {loaded.app.artifact_dir}")
     typer.echo(f"communication_mode: {loaded.runtime.communication_mode}")
     typer.echo(f"live_trading: {live_status}")
+
+
+@app.command()
+def doctor(
+    profile: str = typer.Option("mvp", help="Check profile: mvp, research, or execution."),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+    config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Validate the local environment and trading safety defaults."""
+    try:
+        selected_profile = DoctorProfile(profile.lower())
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in DoctorProfile)
+        raise typer.BadParameter(f"profile must be one of: {allowed}") from exc
+
+    report = run_doctor(
+        config_path=config,
+        project_root=project_root,
+        profile=selected_profile,
+    )
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        typer.echo(render_doctor_report(report))
+    if report.has_failures:
+        raise typer.Exit(1)
 
 
 @app.command()
