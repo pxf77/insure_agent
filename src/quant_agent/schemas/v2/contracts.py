@@ -7,6 +7,7 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from quant_agent.schemas.v2.primitives import (
     AwareDateTime,
     InstrumentId,
