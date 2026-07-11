@@ -1,0 +1,254 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Literal
+from uuid import uuid4
+
+import pandas as pd
+from pydantic import BaseModel, ConfigDict, Field
+
+from quant_agent.data.providers.base import MarketDataProvider
+from quant_agent.data.quality import (
+    DAILY_BAR_SNAPSHOT_COLUMNS,
+    DataQualityIssue,
+    DataQualityReport,
+    DataQualitySeverity,
+    evaluate_daily_bar_quality,
+)
+from quant_agent.data.symbol import normalize_symbol
+
+
+class SnapshotFile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    path: str
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    rows: int = Field(ge=0)
+    bytes: int = Field(ge=0)
+
+
+class DataSnapshotManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["1.0"] = "1.0"
+    snapshot_id: str = Field(pattern=r"^daily-[0-9a-f]{20}$")
+    dataset: Literal["daily_bar"] = "daily_bar"
+    provider_id: str
+    provider_version: str
+    as_of: datetime
+    created_at: datetime
+    input_rows: int = Field(ge=0)
+    visible_rows: int = Field(ge=0)
+    symbols: list[str]
+    quality_summary: dict[str, int]
+    files: list[SnapshotFile]
+
+
+class SnapshotBuildResult(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    snapshot_dir: Path
+    manifest_path: Path
+    quality_path: Path
+    raw_path: Path
+    normalized_path: Path
+    manifest: DataSnapshotManifest
+    reused: bool
+
+
+def _aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("as_of must include timezone information")
+    return value.astimezone(timezone.utc)
+
+
+def _canonical_json(payload: object) -> bytes:
+    return (json.dumps(payload, sort_keys=True, ensure_ascii=False, indent=2) + "\n").encode()
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _canonical_csv(frame: pd.DataFrame) -> bytes:
+    return frame.to_csv(
+        index=False,
+        lineterminator="\n",
+        float_format="%.10g",
+    ).encode("utf-8")
+
+
+def normalize_daily_bars(frame: pd.DataFrame) -> pd.DataFrame:
+    normalized = frame.loc[:, list(DAILY_BAR_SNAPSHOT_COLUMNS)].copy()
+    normalized["trade_date"] = pd.to_datetime(normalized["trade_date"]).dt.strftime("%Y-%m-%d")
+    normalized["symbol"] = normalized["symbol"].map(lambda value: normalize_symbol(str(value)))
+    normalized["available_at"] = pd.to_datetime(
+        normalized["available_at"], utc=True
+    ).dt.strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    for column in ("open", "high", "low", "close", "volume", "amount"):
+        normalized[column] = pd.to_numeric(normalized[column])
+    normalized = normalized.sort_values(
+        ["trade_date", "symbol", "available_at"],
+        kind="mergesort",
+    ).reset_index(drop=True)
+    return normalized
+
+
+class SnapshotBuilder:
+    def __init__(self, *, snapshot_root: str | Path):
+        self.snapshot_root = Path(snapshot_root)
+
+    def build_daily_bars(
+        self,
+        provider: MarketDataProvider,
+        *,
+        as_of: datetime,
+    ) -> SnapshotBuildResult:
+        as_of_utc = _aware_utc(as_of)
+        source = provider.fetch_daily_bars(as_of=as_of_utc).copy()
+        input_rows = len(source)
+
+        missing = [column for column in DAILY_BAR_SNAPSHOT_COLUMNS if column not in source.columns]
+        if missing:
+            report = evaluate_daily_bar_quality(source)
+            raise ValueError(self._blocked_message(report))
+
+        available_at = pd.to_datetime(source["available_at"], errors="coerce", utc=True)
+        invalid_available_at = available_at.isna()
+        if invalid_available_at.any():
+            report = evaluate_daily_bar_quality(source)
+            raise ValueError(self._blocked_message(report))
+
+        visible = source.loc[available_at <= as_of_utc].copy()
+        report = evaluate_daily_bar_quality(visible)
+        if visible.empty:
+            report.issues.append(
+                DataQualityIssue(
+                    check_id="EMPTY_AS_OF",
+                    severity=DataQualitySeverity.CRITICAL,
+                    message="no daily bar rows are available at the requested as_of time",
+                    row_count=0,
+                )
+            )
+        if report.blocked:
+            raise ValueError(self._blocked_message(report))
+
+        normalized = normalize_daily_bars(visible)
+        raw_content = _canonical_csv(visible.loc[:, list(DAILY_BAR_SNAPSHOT_COLUMNS)])
+        normalized_content = _canonical_csv(normalized)
+        quality_content = _canonical_json(report.model_dump(mode="json"))
+        as_of_text = as_of_utc.isoformat().replace("+00:00", "Z")
+        identity = _canonical_json(
+            {
+                "schema_version": "1.0",
+                "dataset": "daily_bar",
+                "provider_id": provider.provider_id,
+                "provider_version": provider.provider_version,
+                "as_of": as_of_text,
+                "normalized_sha256": _sha256(normalized_content),
+                "quality_sha256": _sha256(quality_content),
+            }
+        )
+        snapshot_id = f"daily-{_sha256(identity)[:20]}"
+        snapshot_dir = self.snapshot_root / snapshot_id
+        if snapshot_dir.exists():
+            manifest = self._verify_existing(snapshot_dir)
+            return self._result(snapshot_dir, manifest, reused=True)
+
+        temporary_dir = self.snapshot_root / f".{snapshot_id}.{uuid4().hex}.tmp"
+        try:
+            (temporary_dir / "raw").mkdir(parents=True, exist_ok=False)
+            (temporary_dir / "normalized").mkdir(parents=True, exist_ok=False)
+            raw_path = temporary_dir / "raw" / "daily_bar.csv"
+            normalized_path = temporary_dir / "normalized" / "daily_bar.csv"
+            quality_path = temporary_dir / "data_quality.json"
+            raw_path.write_bytes(raw_content)
+            normalized_path.write_bytes(normalized_content)
+            quality_path.write_bytes(quality_content)
+
+            files = [
+                self._file_record(raw_path, temporary_dir, len(visible)),
+                self._file_record(normalized_path, temporary_dir, len(normalized)),
+                self._file_record(quality_path, temporary_dir, len(report.issues)),
+            ]
+            manifest = DataSnapshotManifest(
+                snapshot_id=snapshot_id,
+                provider_id=provider.provider_id,
+                provider_version=provider.provider_version,
+                as_of=as_of_utc,
+                created_at=datetime.now(timezone.utc),
+                input_rows=input_rows,
+                visible_rows=len(normalized),
+                symbols=sorted(normalized["symbol"].unique().tolist()),
+                quality_summary=report.summary,
+                files=files,
+            )
+            (temporary_dir / "manifest.json").write_bytes(
+                _canonical_json(manifest.model_dump(mode="json"))
+            )
+            self.snapshot_root.mkdir(parents=True, exist_ok=True)
+            try:
+                os.rename(temporary_dir, snapshot_dir)
+            except FileExistsError:
+                shutil.rmtree(temporary_dir)
+                manifest = self._verify_existing(snapshot_dir)
+                return self._result(snapshot_dir, manifest, reused=True)
+        except Exception:
+            if temporary_dir.exists():
+                shutil.rmtree(temporary_dir)
+            raise
+
+        return self._result(snapshot_dir, manifest, reused=False)
+
+    @staticmethod
+    def _file_record(path: Path, root: Path, rows: int) -> SnapshotFile:
+        content = path.read_bytes()
+        return SnapshotFile(
+            path=path.relative_to(root).as_posix(),
+            sha256=_sha256(content),
+            rows=rows,
+            bytes=len(content),
+        )
+
+    @staticmethod
+    def _blocked_message(report: DataQualityReport) -> str:
+        check_ids = [issue.check_id for issue in report.issues if issue.severity == "CRITICAL"]
+        return f"data quality blocked snapshot: {', '.join(check_ids) or 'UNKNOWN'}"
+
+    def _verify_existing(self, snapshot_dir: Path) -> DataSnapshotManifest:
+        manifest_path = snapshot_dir / "manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError(f"snapshot is incomplete: {snapshot_dir}")
+        manifest = DataSnapshotManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+        if manifest.snapshot_id != snapshot_dir.name:
+            raise ValueError("snapshot manifest ID does not match directory")
+        for artifact in manifest.files:
+            path = snapshot_dir / artifact.path
+            if not path.is_file():
+                raise ValueError(f"snapshot artifact is missing: {artifact.path}")
+            content = path.read_bytes()
+            if _sha256(content) != artifact.sha256 or len(content) != artifact.bytes:
+                raise ValueError(f"snapshot artifact failed integrity check: {artifact.path}")
+        return manifest
+
+    @staticmethod
+    def _result(
+        snapshot_dir: Path,
+        manifest: DataSnapshotManifest,
+        *,
+        reused: bool,
+    ) -> SnapshotBuildResult:
+        return SnapshotBuildResult(
+            snapshot_dir=snapshot_dir,
+            manifest_path=snapshot_dir / "manifest.json",
+            quality_path=snapshot_dir / "data_quality.json",
+            raw_path=snapshot_dir / "raw" / "daily_bar.csv",
+            normalized_path=snapshot_dir / "normalized" / "daily_bar.csv",
+            manifest=manifest,
+            reused=reused,
+        )
