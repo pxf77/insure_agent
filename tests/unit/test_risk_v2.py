@@ -6,7 +6,7 @@ from uuid import UUID
 
 from quant_agent.risk.kill_switch_store import KillSwitchStore
 from quant_agent.risk.v2_engine import DeterministicRiskEngine
-from quant_agent.risk.v2_models import RiskContext, RiskPolicy
+from quant_agent.risk.v2_models import KillSwitchScope, RiskContext, RiskPolicy
 from quant_agent.schemas.v2 import RiskDecisionType, TargetPortfolio
 
 
@@ -112,7 +112,7 @@ def test_industry_weight_scaling_is_deterministic(tmp_path: Path) -> None:
 def test_kill_switch_store_is_atomic_and_scope_aware(tmp_path: Path) -> None:
     store = KillSwitchStore(tmp_path / "risk" / "switches.json")
     store.set(
-        scope="ACCOUNT",
+        scope=KillSwitchScope.ACCOUNT,
         scope_id="paper",
         active=True,
         reduce_only=True,

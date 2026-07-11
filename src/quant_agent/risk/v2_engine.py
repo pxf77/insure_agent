@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from dataclasses import dataclass
 from datetime import timedelta
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 
 from quant_agent.risk.kill_switch_store import KillSwitchStore
-from quant_agent.risk.v2_models import RiskContext, RiskPolicy
+from quant_agent.risk.v2_models import InstrumentRiskState, RiskContext, RiskPolicy
 from quant_agent.schemas.v2 import (
     ApprovedTarget,
     RiskDecisionType,
@@ -15,9 +16,34 @@ from quant_agent.schemas.v2 import (
     TargetPortfolio,
 )
 
+_WEIGHT_QUANTUM = Decimal("0.0000000001")
+_ZERO = Decimal("0")
+_ONE = Decimal("1")
+
+
+@dataclass(frozen=True)
+class _Bound:
+    value: Decimal
+    rule_id: str
+    reason_code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class _InfeasiblePortfolio(Exception):
+    rule_id: str
+    reason_code: str
+    message: str
+
+
+def _weight(value: Decimal) -> Decimal:
+    if value <= _ZERO:
+        return _ZERO
+    return value.quantize(_WEIGHT_QUANTUM, rounding=ROUND_DOWN)
+
 
 class DeterministicRiskEngine:
-    """Ordered fail-closed risk evaluation for v2 target portfolios."""
+    """Ordered fail-closed risk evaluation for complete v2 target portfolios."""
 
     def __init__(self, *, policy: RiskPolicy, kill_switch_store: KillSwitchStore):
         self.policy = policy
@@ -25,12 +51,6 @@ class DeterministicRiskEngine:
 
     def evaluate(self, target: TargetPortfolio, context: RiskContext) -> RiskDecisionV2:
         results: list[RiskRuleResult] = []
-        original = {
-            str(position.instrument): position.target_weight for position in target.positions
-        }
-        weights = dict(original)
-        reasons: dict[str, str] = {}
-
         if target.strategy_id != context.strategy_id:
             return self._reject(
                 target,
@@ -43,15 +63,46 @@ class DeterministicRiskEngine:
 
         market = {str(item.instrument): item for item in context.instruments}
         current = {str(item.instrument): item for item in context.current_positions}
-        unknown = sorted(set(weights) - set(market))
-        if unknown:
+        working_instruments = sorted(
+            {str(position.instrument) for position in target.positions} | set(current)
+        )
+        missing_market = sorted(set(working_instruments) - set(market))
+        if missing_market:
             return self._reject(
                 target,
                 context,
                 results,
                 rule_id="INPUT_CONTEXT",
                 reason_code="MISSING_INSTRUMENT_CONTEXT",
-                message=f"missing risk context for instruments: {unknown}",
+                message=f"missing risk context for instruments: {missing_market}",
+            )
+        inconsistent_industries = sorted(
+            instrument
+            for instrument, position in current.items()
+            if market[instrument].industry != position.industry
+        )
+        if inconsistent_industries:
+            return self._reject(
+                target,
+                context,
+                results,
+                rule_id="INPUT_CONTEXT",
+                reason_code="INDUSTRY_CONTEXT_MISMATCH",
+                message=f"industry mismatch for instruments: {inconsistent_industries}",
+            )
+        current_invested = sum(
+            (position.current_weight for position in current.values()),
+            _ZERO,
+        )
+        cash_weight = context.cash / context.account_value
+        if current_invested + cash_weight > _ONE + _WEIGHT_QUANTUM:
+            return self._reject(
+                target,
+                context,
+                results,
+                rule_id="ACCOUNT_STATE",
+                reason_code="ACCOUNT_STATE_INCONSISTENT",
+                message="current position weights plus cash weight exceed account value",
             )
 
         freshness = context.evaluated_at - context.snapshot_as_of
@@ -64,8 +115,7 @@ class DeterministicRiskEngine:
                 reason_code="SNAPSHOT_FROM_FUTURE",
                 message="snapshot_as_of is later than evaluated_at",
             )
-        maximum_age = timedelta(minutes=self.policy.max_data_age_minutes)
-        if freshness > maximum_age:
+        if freshness > timedelta(minutes=self.policy.max_data_age_minutes):
             return self._reject(
                 target,
                 context,
@@ -90,55 +140,29 @@ class DeterministicRiskEngine:
             account_id=context.account_id,
             strategy_id=context.strategy_id,
         )
-        hard_switches = [record for record in switches if not record.reduce_only]
+        hard_switches = [record.switch_id for record in switches if not record.reduce_only]
         if hard_switches:
-            switch_ids = [record.switch_id for record in hard_switches]
             return self._reject(
                 target,
                 context,
                 results,
                 rule_id="KILL_SWITCH",
                 reason_code="KILL_SWITCH_ACTIVE",
-                message=f"hard kill switch active: {switch_ids}",
+                message=f"hard kill switch active: {hard_switches}",
             )
-
         reduce_only = bool(switches)
-        if reduce_only:
-            for instrument in sorted(weights):
-                current_weight = current.get(instrument)
-                maximum = current_weight.current_weight if current_weight else Decimal("0")
-                if weights[instrument] > maximum:
-                    weights[instrument] = maximum
-                    reasons.setdefault(instrument, "REDUCE_ONLY")
-                    results.append(
-                        self._adjustment(
-                            rule_id="KILL_SWITCH",
-                            reason_code="REDUCE_ONLY",
-                            message="reduce-only kill switch blocked a position increase",
-                            instrument=instrument,
-                            original_value=original[instrument],
-                            threshold=maximum,
-                            adjusted_value=maximum,
-                        )
-                    )
-            if not any(result.rule_id == "KILL_SWITCH" for result in results):
-                results.append(
-                    self._result(
-                        rule_id="KILL_SWITCH",
-                        outcome=RuleOutcome.WARN,
-                        reason_code="REDUCE_ONLY_ACTIVE",
-                        message="reduce-only kill switch is active",
-                    )
-                )
-        else:
-            results.append(
-                self._result(
-                    rule_id="KILL_SWITCH",
-                    outcome=RuleOutcome.PASS,
-                    reason_code="NO_KILL_SWITCH",
-                    message="no applicable kill switch is active",
-                )
+        results.append(
+            self._result(
+                rule_id="KILL_SWITCH",
+                outcome=RuleOutcome.WARN if reduce_only else RuleOutcome.PASS,
+                reason_code="REDUCE_ONLY_ACTIVE" if reduce_only else "NO_KILL_SWITCH",
+                message=(
+                    "reduce-only kill switch is active"
+                    if reduce_only
+                    else "no applicable kill switch is active"
+                ),
             )
+        )
 
         if context.daily_loss >= self.policy.max_daily_loss:
             return self._reject(
@@ -193,112 +217,148 @@ class DeterministicRiskEngine:
             )
         )
 
-        for instrument in sorted(weights):
-            state = market[instrument]
+        requested = {
+            str(position.instrument): position.target_weight for position in target.positions
+        }
+        original = {
+            instrument: requested.get(instrument, _ZERO)
+            for instrument in working_instruments
+        }
+        weights = dict(original)
+        floors: dict[str, Decimal] = {}
+        reasons: dict[str, str] = {}
+        for instrument in working_instruments:
             position = current.get(instrument)
-            current_weight = position.current_weight if position else Decimal("0")
-            target_weight = weights[instrument]
-
-            if state.suspended and target_weight != current_weight:
-                self._set_weight(
-                    weights,
-                    reasons,
-                    results,
-                    instrument=instrument,
-                    adjusted=current_weight,
-                    rule_id="TRADABILITY",
-                    reason_code="SUSPENDED",
-                    message="suspended instrument cannot be rebalanced",
-                )
-                target_weight = weights[instrument]
-            if state.is_st and not self.policy.allow_st and target_weight > current_weight:
-                self._set_weight(
-                    weights,
-                    reasons,
-                    results,
-                    instrument=instrument,
-                    adjusted=current_weight,
-                    rule_id="TRADABILITY",
-                    reason_code="ST_BUY_BLOCKED",
-                    message="ST instrument position increase is blocked",
-                )
-                target_weight = weights[instrument]
-            if state.limit_up and target_weight > current_weight:
-                self._set_weight(
-                    weights,
-                    reasons,
-                    results,
-                    instrument=instrument,
-                    adjusted=current_weight,
-                    rule_id="TRADABILITY",
-                    reason_code="LIMIT_UP_BUY_BLOCKED",
-                    message="limit-up instrument cannot be increased",
-                )
-                target_weight = weights[instrument]
-            if state.limit_down and target_weight < current_weight:
-                self._set_weight(
-                    weights,
-                    reasons,
-                    results,
-                    instrument=instrument,
-                    adjusted=current_weight,
+            state = market[instrument]
+            current_weight = position.current_weight if position else _ZERO
+            sellable_weight = position.sellable_weight if position else _ZERO
+            floor = _Bound(
+                value=max(_ZERO, current_weight - sellable_weight),
+                rule_id="T_PLUS_ONE",
+                reason_code="T_PLUS_ONE_SELL_LIMIT",
+                message="target reduction exceeds sellable position weight",
+            )
+            if state.limit_down and current_weight > floor.value:
+                floor = _Bound(
+                    value=current_weight,
                     rule_id="TRADABILITY",
                     reason_code="LIMIT_DOWN_SELL_BLOCKED",
                     message="limit-down instrument cannot be reduced",
                 )
-                target_weight = weights[instrument]
+            if state.suspended and current_weight >= floor.value:
+                floor = _Bound(
+                    value=current_weight,
+                    rule_id="TRADABILITY",
+                    reason_code="SUSPENDED",
+                    message="suspended instrument cannot be rebalanced",
+                )
 
-            if position and target_weight < current_weight:
-                minimum_weight = current_weight - position.sellable_weight
-                if target_weight < minimum_weight:
-                    self._set_weight(
-                        weights,
-                        reasons,
-                        results,
-                        instrument=instrument,
-                        adjusted=minimum_weight,
-                        rule_id="T_PLUS_ONE",
-                        reason_code="T_PLUS_ONE_SELL_LIMIT",
-                        message="target reduction exceeds sellable position weight",
-                    )
-                    target_weight = weights[instrument]
-
-            if target_weight > state.max_liquidity_weight:
+            ceiling = _Bound(
+                value=min(state.max_liquidity_weight, self.policy.max_single_weight),
+                rule_id=(
+                    "LIQUIDITY"
+                    if state.max_liquidity_weight <= self.policy.max_single_weight
+                    else "SINGLE_POSITION"
+                ),
+                reason_code=(
+                    "LIQUIDITY_CAP"
+                    if state.max_liquidity_weight <= self.policy.max_single_weight
+                    else "MAX_SINGLE_WEIGHT"
+                ),
+                message=(
+                    "target weight exceeds liquidity capacity"
+                    if state.max_liquidity_weight <= self.policy.max_single_weight
+                    else "target weight exceeds single-position limit"
+                ),
+            )
+            if state.limit_up and current_weight < ceiling.value:
+                ceiling = _Bound(
+                    value=current_weight,
+                    rule_id="TRADABILITY",
+                    reason_code="LIMIT_UP_BUY_BLOCKED",
+                    message="limit-up instrument cannot be increased",
+                )
+            if state.is_st and not self.policy.allow_st and current_weight <= ceiling.value:
+                ceiling = _Bound(
+                    value=current_weight,
+                    rule_id="TRADABILITY",
+                    reason_code="ST_BUY_BLOCKED",
+                    message="ST instrument position increase is blocked",
+                )
+            if reduce_only and current_weight <= ceiling.value:
+                ceiling = _Bound(
+                    value=current_weight,
+                    rule_id="KILL_SWITCH",
+                    reason_code="REDUCE_ONLY",
+                    message="reduce-only kill switch blocked a position increase",
+                )
+            if state.suspended and current_weight <= ceiling.value:
+                ceiling = _Bound(
+                    value=current_weight,
+                    rule_id="TRADABILITY",
+                    reason_code="SUSPENDED",
+                    message="suspended instrument cannot be rebalanced",
+                )
+            if floor.value > ceiling.value:
+                return self._reject(
+                    target,
+                    context,
+                    results,
+                    rule_id="INSTRUMENT_BOUNDS",
+                    reason_code="INFEASIBLE_INSTRUMENT_BOUNDS",
+                    message=(
+                        f"instrument {instrument} has floor {floor.value} above "
+                        f"ceiling {ceiling.value}"
+                    ),
+                )
+            floors[instrument] = floor.value
+            if weights[instrument] < floor.value:
                 self._set_weight(
                     weights,
                     reasons,
                     results,
                     instrument=instrument,
-                    adjusted=state.max_liquidity_weight,
-                    rule_id="LIQUIDITY",
-                    reason_code="LIQUIDITY_CAP",
-                    message="target weight exceeds liquidity capacity",
+                    adjusted=floor.value,
+                    threshold=floor.value,
+                    bound=floor,
                 )
-                target_weight = weights[instrument]
-
-            if target_weight > self.policy.max_single_weight:
+            elif weights[instrument] > ceiling.value:
                 self._set_weight(
                     weights,
                     reasons,
                     results,
                     instrument=instrument,
-                    adjusted=self.policy.max_single_weight,
-                    rule_id="SINGLE_POSITION",
-                    reason_code="MAX_SINGLE_WEIGHT",
-                    message="target weight exceeds single-position limit",
+                    adjusted=ceiling.value,
+                    threshold=ceiling.value,
+                    bound=ceiling,
                 )
 
-        self._apply_industry_limit(weights, reasons, results, market)
-        effective_total_limit = min(
-            self.policy.max_total_weight,
-            Decimal("1") - self.policy.minimum_cash_weight,
-        )
-        self._scale_total(
-            weights,
-            reasons,
-            results,
-            limit=effective_total_limit,
-        )
+        try:
+            self._apply_industry_limits(weights, floors, reasons, results, market)
+            effective_total_limit = min(
+                self.policy.max_total_weight,
+                _ONE - self.policy.minimum_cash_weight,
+            )
+            self._scale_with_floors(
+                instruments=working_instruments,
+                weights=weights,
+                floors=floors,
+                reasons=reasons,
+                results=results,
+                limit=effective_total_limit,
+                rule_id="TOTAL_WEIGHT",
+                reason_code="MAX_TOTAL_WEIGHT",
+                message="portfolio target exceeds effective invested-weight limit",
+            )
+        except _InfeasiblePortfolio as exc:
+            return self._reject(
+                target,
+                context,
+                results,
+                rule_id=exc.rule_id,
+                reason_code=exc.reason_code,
+                message=exc.message,
+            )
 
         adjusted = any(weights[key] != original[key] for key in original)
         if not adjusted:
@@ -313,77 +373,95 @@ class DeterministicRiskEngine:
         positions = [
             ApprovedTarget(
                 instrument=instrument,
-                target_weight=weights[instrument],
+                target_weight=_weight(weights[instrument]),
                 adjusted=weights[instrument] != original[instrument],
                 reason_code=reasons.get(instrument),
             )
-            for instrument in sorted(weights)
+            for instrument in working_instruments
         ]
-        decision = RiskDecisionType.ADJUST if adjusted else RiskDecisionType.APPROVE
         return RiskDecisionV2(
             run_id=target.run_id,
             strategy_id=target.strategy_id,
             policy_version=self.policy.policy_version,
-            decision=decision,
+            decision=(RiskDecisionType.ADJUST if adjusted else RiskDecisionType.APPROVE),
             approved=True,
             decided_at=context.evaluated_at,
             positions=positions,
             rule_results=results,
         )
 
-    def _apply_industry_limit(
+    def _apply_industry_limits(
         self,
         weights: dict[str, Decimal],
+        floors: dict[str, Decimal],
         reasons: dict[str, str],
         results: list[RiskRuleResult],
-        market: dict[str, object],
+        market: dict[str, InstrumentRiskState],
     ) -> None:
         industries: dict[str, list[str]] = defaultdict(list)
         for instrument in sorted(weights):
-            state = market[instrument]
-            industry = getattr(state, "industry")
-            industries[str(industry)].append(instrument)
+            industries[market[instrument].industry].append(instrument)
         for industry in sorted(industries):
-            instruments = industries[industry]
-            total = sum((weights[item] for item in instruments), Decimal("0"))
-            if total <= self.policy.max_industry_weight or total == 0:
-                continue
-            factor = self.policy.max_industry_weight / total
-            for instrument in instruments:
-                adjusted = weights[instrument] * factor
-                self._set_weight(
-                    weights,
-                    reasons,
-                    results,
-                    instrument=instrument,
-                    adjusted=adjusted,
-                    rule_id="INDUSTRY_LIMIT",
-                    reason_code="MAX_INDUSTRY_WEIGHT",
-                    message=f"industry {industry} exceeds configured limit",
-                )
+            self._scale_with_floors(
+                instruments=industries[industry],
+                weights=weights,
+                floors=floors,
+                reasons=reasons,
+                results=results,
+                limit=self.policy.max_industry_weight,
+                rule_id="INDUSTRY_LIMIT",
+                reason_code="MAX_INDUSTRY_WEIGHT",
+                message=f"industry {industry} exceeds configured limit",
+            )
 
-    def _scale_total(
-        self,
+    @staticmethod
+    def _scale_with_floors(
+        *,
+        instruments: list[str],
         weights: dict[str, Decimal],
+        floors: dict[str, Decimal],
         reasons: dict[str, str],
         results: list[RiskRuleResult],
-        *,
         limit: Decimal,
+        rule_id: str,
+        reason_code: str,
+        message: str,
     ) -> None:
-        total = sum(weights.values(), Decimal("0"))
-        if total <= limit or total == 0:
+        total = sum((weights[item] for item in instruments), _ZERO)
+        if total <= limit:
             return
-        factor = limit / total
-        for instrument in sorted(weights):
-            self._set_weight(
+        floor_total = sum((floors[item] for item in instruments), _ZERO)
+        if floor_total > limit:
+            raise _InfeasiblePortfolio(
+                rule_id=rule_id,
+                reason_code=f"INFEASIBLE_{reason_code}",
+                message=f"mandatory sell floors {floor_total} exceed limit {limit}",
+            )
+        flexible_total = total - floor_total
+        if flexible_total <= _ZERO:
+            raise _InfeasiblePortfolio(
+                rule_id=rule_id,
+                reason_code=f"INFEASIBLE_{reason_code}",
+                message="portfolio cannot be reduced without violating sell floors",
+            )
+        factor = (limit - floor_total) / flexible_total
+        bound = _Bound(
+            value=limit,
+            rule_id=rule_id,
+            reason_code=reason_code,
+            message=message,
+        )
+        for instrument in sorted(instruments):
+            flexible = weights[instrument] - floors[instrument]
+            adjusted = floors[instrument] + _weight(flexible * factor)
+            DeterministicRiskEngine._set_weight(
                 weights,
                 reasons,
                 results,
                 instrument=instrument,
-                adjusted=weights[instrument] * factor,
-                rule_id="TOTAL_WEIGHT",
-                reason_code="MAX_TOTAL_WEIGHT",
-                message="portfolio target exceeds effective invested-weight limit",
+                adjusted=adjusted,
+                threshold=limit,
+                bound=bound,
             )
 
     @staticmethod
@@ -394,24 +472,26 @@ class DeterministicRiskEngine:
         *,
         instrument: str,
         adjusted: Decimal,
-        rule_id: str,
-        reason_code: str,
-        message: str,
+        threshold: Decimal,
+        bound: _Bound,
     ) -> None:
-        original = weights[instrument]
-        if adjusted == original:
+        previous = weights[instrument]
+        normalized = _weight(adjusted)
+        if normalized == previous:
             return
-        weights[instrument] = adjusted
-        reasons.setdefault(instrument, reason_code)
+        weights[instrument] = normalized
+        reasons.setdefault(instrument, bound.reason_code)
         results.append(
-            DeterministicRiskEngine._adjustment(
-                rule_id=rule_id,
-                reason_code=reason_code,
-                message=message,
+            RiskRuleResult(
+                rule_id=bound.rule_id,
+                rule_version="1",
+                outcome=RuleOutcome.ADJUST,
+                reason_code=bound.reason_code,
+                message=bound.message,
                 instrument=instrument,
-                original_value=original,
-                threshold=adjusted,
-                adjusted_value=adjusted,
+                original_value=str(previous),
+                threshold=str(threshold),
+                adjusted_value=str(normalized),
             )
         )
 
@@ -442,29 +522,6 @@ class DeterministicRiskEngine:
             decided_at=context.evaluated_at,
             positions=[],
             rule_results=results,
-        )
-
-    @staticmethod
-    def _adjustment(
-        *,
-        rule_id: str,
-        reason_code: str,
-        message: str,
-        instrument: str,
-        original_value: Decimal,
-        threshold: Decimal,
-        adjusted_value: Decimal,
-    ) -> RiskRuleResult:
-        return RiskRuleResult(
-            rule_id=rule_id,
-            rule_version="1",
-            outcome=RuleOutcome.ADJUST,
-            reason_code=reason_code,
-            message=message,
-            instrument=instrument,
-            original_value=str(original_value),
-            threshold=str(threshold),
-            adjusted_value=str(adjusted_value),
         )
 
     @staticmethod
