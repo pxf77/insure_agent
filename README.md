@@ -38,12 +38,14 @@ Implemented modules:
   that write `approved_positions.json`.
 - `src/quant_agent/execution`: mock paper execution bridge that converts
   approved positions into local orders and trades.
-- `src/quant_agent/schemas`: Pydantic contracts shared by research, risk, and
-  execution layers.
+- `src/quant_agent/schemas`: backward-compatible v1 contracts and versioned v2
+  domain contracts for research, risk, events, and order intents.
+- `src/quant_agent/evals`: deterministic evaluation runners.
 - `src/quant_agent/cli.py`: `quant-agent` commands for the local MVP workflow.
 - `configs/env/dev.yaml`: default local development configuration.
 - `configs/research`, `configs/risk`, and `configs/execution`: local MVP
   strategy, risk, and mock execution settings.
+- `evals/contracts`: reviewable positive and adversarial contract cases.
 - `scripts/`: thin script wrappers for Makefile and direct command usage.
 - `tests/unit` and `tests/integration`: behavior coverage for contracts,
   pipeline steps, and the end-to-end local MVP flow.
@@ -80,7 +82,8 @@ artifact-directory writability, live-trading safety defaults, command-line
 tools, and optional Qlib/RD-Agent/vn.py dependencies. Missing optional modules
 are warnings in the `mvp` profile.
 
-Use stricter profiles when preparing research or execution environments:
+Use stricter profiles when preparing research or paper/gateway-development
+environments:
 
 ```bash
 quant-agent doctor --profile research
@@ -89,7 +92,32 @@ quant-agent doctor --profile mvp --json
 ```
 
 A failed safety or required-dependency check exits non-zero. The doctor does not
-certify a machine for real-money trading.
+certify a machine for real-money trading. Any configuration with live trading
+enabled fails until the M9 live-readiness controls are implemented.
+
+## Versioned Contracts And Evaluation
+
+The existing local pipeline continues to read and write its v1 payloads. New
+cross-service development should target the contracts under
+`src/quant_agent/schemas/v2`.
+
+Export deterministic JSON Schemas and their SHA-256 manifest:
+
+```bash
+quant-agent contracts export --output artifacts/contracts
+```
+
+Run the public contract suites:
+
+```bash
+quant-agent eval contracts --suite evals/contracts/v0.1.yaml
+quant-agent eval contracts --suite evals/contracts/v0.1-hardening.yaml
+```
+
+The suites cover symbol normalization, aware timestamps, research split
+isolation, portfolio uniqueness and weight constraints, deterministic risk
+decisions, idempotency keys, immutable buy-lot size, and order price semantics.
+A failed case exits non-zero and blocks CI.
 
 ## Quick Start
 
@@ -141,6 +169,8 @@ artifacts/data/raw/daily_bar.csv
 artifacts/data/qlib/cn_data/features/*.csv
 artifacts/data/qlib/cn_data/instruments/all_a.txt
 artifacts/data/qlib/cn_data/metadata.json
+artifacts/contracts/*.schema.json
+artifacts/contracts/index.json
 artifacts/research_runs/<run_id>/target_positions.json
 artifacts/research_runs/<run_id>/metrics.json
 artifacts/risk_runs/<run_id>/approved_positions.json
@@ -155,6 +185,8 @@ artifacts/latest.json
 ```bash
 quant-agent status
 quant-agent doctor --profile mvp
+quant-agent contracts export
+quant-agent eval contracts --suite evals/contracts/v0.1.yaml
 quant-agent init
 quant-agent data pull --sample
 quant-agent data convert
@@ -171,6 +203,8 @@ Equivalent Makefile entry points:
 
 ```bash
 make doctor
+make contracts-export
+make eval-contracts
 make init
 make data-pull
 make data-convert
@@ -194,16 +228,18 @@ Run the full current verification set:
 
 ```bash
 uv run --python 3.13 --extra dev pytest -q
+uv run --python 3.13 --extra dev quant-agent eval contracts --suite evals/contracts/v0.1.yaml
+uv run --python 3.13 --extra dev quant-agent eval contracts --suite evals/contracts/v0.1-hardening.yaml
 uv run --python 3.13 --extra dev ruff check src tests scripts
 uv run --python 3.13 --extra dev mypy src
 ```
 
 ## Safety Boundaries
 
-This repository must not enable real trading by default.
+This repository must not enable real trading in the current phase.
 
-- Real broker integration is not implemented in the current phase.
-- `live` trading must remain disabled unless explicitly configured and reviewed.
+- Real broker integration is not implemented.
+- Every live-enabled configuration fails the environment doctor until M9.
 - Creating `artifacts/KILL_SWITCH` causes `quant-agent risk validate` to reject
   targets and exit with a non-zero status.
 - Do not commit secrets, API keys, broker credentials, `.env` files, or runtime
