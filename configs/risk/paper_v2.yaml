@@ -1,0 +1,11 @@
+schema_version: "1.0"
+policy_version: paper-v2.1
+max_data_age_minutes: 1440
+max_single_weight: "0.20"
+max_total_weight: "0.80"
+max_industry_weight: "0.35"
+minimum_cash_weight: "0.20"
+max_daily_loss: "0.05"
+max_drawdown: "0.20"
+allow_st: false
+require_approval: true
