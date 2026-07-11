@@ -19,6 +19,15 @@ def test_contract_eval_suite_v01_passes() -> None:
     assert report.failed == 0
 
 
+def test_contract_hardening_suite_passes() -> None:
+    report = run_contract_evals(Path("evals/contracts/v0.1-hardening.yaml"))
+
+    assert report.success
+    assert report.total == 6
+    assert report.passed == 6
+    assert report.failed == 0
+
+
 def test_contract_eval_runner_reports_intentional_failure(tmp_path: Path) -> None:
     suite = tmp_path / "failing.yaml"
     suite.write_text(
