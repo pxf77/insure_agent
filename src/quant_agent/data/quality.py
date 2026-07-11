@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter
+from datetime import datetime
 from enum import Enum
 from typing import Any
 
@@ -55,6 +56,18 @@ class DataQualityReport(BaseModel):
             "critical": counts[DataQualitySeverity.CRITICAL.value],
             "warning": counts[DataQualitySeverity.WARNING.value],
         }
+
+
+def has_explicit_timezone(value: object) -> bool:
+    if isinstance(value, datetime):
+        return value.tzinfo is not None and value.utcoffset() is not None
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None and parsed.utcoffset() is not None
 
 
 def _samples(frame: pd.DataFrame, mask: pd.Series, limit: int = 3) -> list[dict[str, Any]]:
@@ -120,6 +133,19 @@ def evaluate_daily_bar_quality(frame: pd.DataFrame) -> DataQualityReport:
                 message="rows contain invalid trade dates",
                 row_count=int(invalid_dates.sum()),
                 samples=_samples(frame, invalid_dates),
+            )
+        )
+
+    explicit_timezone = frame["available_at"].map(has_explicit_timezone)
+    naive_available_at = ~explicit_timezone & frame["available_at"].notna()
+    if naive_available_at.any():
+        report.issues.append(
+            DataQualityIssue(
+                check_id="NAIVE_AVAILABLE_AT",
+                severity=DataQualitySeverity.CRITICAL,
+                message="available_at must include an explicit timezone offset or Z",
+                row_count=int(naive_available_at.sum()),
+                samples=_samples(frame, naive_available_at),
             )
         )
 
