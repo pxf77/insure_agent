@@ -87,6 +87,23 @@ cases:
     tags: [quality, symbol, adversarial]
     severity: critical
 
+  - id: data-quality-naive-available-at
+    action: quality
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00"
+    expect_success: false
+    expected_checks: [NAIVE_AVAILABLE_AT]
+    tags: [quality, time, adversarial]
+    severity: critical
+
   - id: pit-excludes-future-known-row
     action: snapshot
     rows:
@@ -117,6 +134,24 @@ cases:
     tags: [pit, time, adversarial]
     severity: critical
 
+  - id: pit-naive-source-availability-rejected
+    action: snapshot
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00"
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    error_contains: "NAIVE_AVAILABLE_AT"
+    tags: [pit, source-time, adversarial]
+    severity: critical
+
   - id: snapshot-id-deterministic-and-reused
     action: snapshot
     rows:
@@ -129,13 +164,66 @@ cases:
     tags: [snapshot, determinism]
     severity: critical
 
-  - id: snapshot-tamper-detected
+  - id: snapshot-artifact-tamper-detected
     action: snapshot
     rows:
       - *valid_row
     as_of: "2026-05-20T16:00:00+08:00"
     expect_success: false
-    tamper: true
+    tamper: artifact
     error_contains: "integrity check"
     tags: [snapshot, integrity, adversarial]
+    severity: critical
+
+  - id: snapshot-manifest-path-traversal-rejected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: manifest_path
+    error_contains: "safe and relative"
+    tags: [snapshot, path-traversal, adversarial]
+    severity: critical
+
+  - id: snapshot-manifest-provenance-tamper-detected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: manifest_provenance
+    error_contains: "identity verification"
+    tags: [snapshot, provenance, adversarial]
+    severity: critical
+
+  - id: snapshot-extra-file-injection-detected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: extra_file
+    error_contains: "unexpected files"
+    tags: [snapshot, injection, adversarial]
+    severity: critical
+
+  - id: snapshot-raw-representation-affects-identity
+    action: snapshot
+    rows:
+      - *valid_row
+    variant_rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00+08:00"
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: true
+    expect_distinct_snapshot: true
+    tags: [snapshot, provenance, raw]
     severity: critical
