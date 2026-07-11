@@ -1,0 +1,51 @@
+name: Risk v2 trusted-approval maintenance
+
+on:
+  push:
+    branches: [codex/qta-080-risk-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/qta-080-risk-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install formatter
+        run: python -m pip install ruff
+      - name: Apply trusted-approval fixes
+        run: |
+          cp .maintenance3/risk_v2_service.py.new src/quant_agent/risk/v2_service.py
+          cp .maintenance3/risk_v2_cli.py.new src/quant_agent/risk/v2_cli.py
+          python .maintenance3/patch_risk.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('.github/workflows/risk-v2-ci.yml')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'tests/unit/test_risk_v2_adversarial.py',
+              'tests/unit/test_risk_v2_adversarial.py tests/unit/test_approval_store.py',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -rf .maintenance3
+          rm .github/workflows/risk-v2-approval-maintenance.yml
+          ruff check --fix src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py tests/unit/test_risk_v2_adversarial.py tests/unit/test_approval_store.py scripts/run_risk_evals.py
+          ruff format src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py tests/unit/test_risk_v2_adversarial.py tests/unit/test_approval_store.py scripts/run_risk_evals.py
+      - name: Commit trusted-approval fixes
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(risk): verify approvals against trusted registry"
+          git push origin HEAD:codex/qta-080-risk-v2
