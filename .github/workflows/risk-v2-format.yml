@@ -1,0 +1,37 @@
+name: Risk v2 one-time format
+
+on:
+  push:
+    branches: [codex/qta-080-risk-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/qta-080-risk-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install tooling
+        run: python -m pip install ruff
+      - name: Format and fix imports
+        run: |
+          ruff check --fix src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py scripts/run_risk_evals.py
+          ruff format src/quant_agent/risk src/quant_agent/evals/risk.py tests/unit/test_risk_v2.py tests/unit/test_risk_v2_service.py tests/unit/test_risk_evals.py scripts/run_risk_evals.py
+          sed -i 's#python -m quant_agent.evals.risk evals/risk/v0.4.yaml#python scripts/run_risk_evals.py evals/risk/v0.4.yaml#' .github/workflows/risk-v2-ci.yml
+          rm .github/workflows/risk-v2-format.yml
+      - name: Commit formatting
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "style(risk): format v2 implementation"
+          git push origin HEAD:codex/qta-080-risk-v2
