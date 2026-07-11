@@ -1,0 +1,26 @@
+research:
+  strategy_id: snapshot_alpha_local_v1
+  universe: synthetic_a_share
+  benchmark: null
+  feature_set: alpha_local_v1
+  model_name: deterministic_ranker_v1
+  random_seed: 42
+  train:
+    start: 2024-01-02
+    end: 2024-12-31
+  validation:
+    start: 2025-01-01
+    end: 2025-06-30
+  test:
+    start: 2025-07-01
+    end: 2026-05-22
+
+portfolio:
+  topk: 3
+  account_value: 1000000
+  lot_size: 100
+
+costs:
+  commission_bps: 3.0
+  sell_tax_bps: 5.0
+  slippage_bps: 2.0
