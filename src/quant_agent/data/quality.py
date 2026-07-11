@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Any, cast
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
@@ -72,7 +72,8 @@ def has_explicit_timezone(value: object) -> bool:
 
 def _samples(frame: pd.DataFrame, mask: pd.Series, limit: int = 3) -> list[dict[str, Any]]:
     sample = frame.loc[mask].head(limit).copy()
-    return sample.astype(object).where(pd.notna(sample), None).to_dict(orient="records")
+    records = sample.astype(object).where(pd.notna(sample), None).to_dict(orient="records")
+    return cast(list[dict[str, Any]], records)
 
 
 def evaluate_daily_bar_quality(frame: pd.DataFrame) -> DataQualityReport:
