@@ -96,4 +96,17 @@ jobs:
           retention-days: 3
 
       - name: Run mypy
-        run: mypy src
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p static-results
+          mypy src 2>&1 | tee static-results/mypy.txt
+
+      - name: Upload mypy diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mypy-diagnostics
+          path: static-results/mypy.txt
+          if-no-files-found: error
+          retention-days: 3
