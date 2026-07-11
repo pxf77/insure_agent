@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -10,8 +11,11 @@ from quant_agent.common.config import load_app_config
 from quant_agent.common.doctor import DoctorProfile, render_doctor_report, run_doctor
 from quant_agent.common.paths import ProjectPaths
 from quant_agent.common.run_index import RunIndex
+from quant_agent.data.providers.synthetic import SyntheticMarketDataProvider
 from quant_agent.data.qlib_converter import QlibConverter
+from quant_agent.data.snapshot import SnapshotBuilder
 from quant_agent.evals.contracts import render_contract_eval_report, run_contract_evals
+from quant_agent.evals.data import render_data_eval_report, run_data_evals
 from quant_agent.execution.order_router import PaperTradingRunner
 from quant_agent.research.qlib_runner import QlibRunner
 from quant_agent.research.report_writer import ReportWriter
@@ -47,6 +51,13 @@ def _load_paths(config_path: Path, project_root: Path) -> tuple[ProjectPaths, st
 def _artifact_root(config_path: Path, project_root: Path) -> Path:
     paths, _, _ = _load_paths(config_path, project_root)
     return paths.artifact_dir
+
+
+def _parse_datetime(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise typer.BadParameter(f"invalid ISO-8601 datetime: {value}") from exc
 
 
 @app.command()
@@ -123,6 +134,21 @@ def eval_contracts_command(
         raise typer.Exit(1)
 
 
+@eval_app.command("data")
+def eval_data_command(
+    suite: Path = Path("evals/data/v0.2.yaml"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run the data-quality and point-in-time evaluation suite."""
+    report = run_data_evals(suite)
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        typer.echo(render_data_eval_report(report))
+    if not report.success:
+        raise typer.Exit(1)
+
+
 @data_app.command("pull")
 def data_pull(
     sample: bool = typer.Option(False, "--sample", help="Generate deterministic sample data."),
@@ -172,6 +198,32 @@ def data_pull(
     output_path = paths.raw_data / "daily_bar.csv"
     sample_frame.to_csv(output_path, index=False)
     typer.echo(f"wrote sample daily bars to {output_path}")
+
+
+@data_app.command("snapshot")
+def data_snapshot(
+    as_of: str = typer.Option(
+        "2026-05-22T16:00:00+08:00",
+        help="Point-in-time cutoff as an aware ISO-8601 datetime.",
+    ),
+    provider: str = typer.Option("synthetic", help="Provider name; currently synthetic only."),
+    config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Build an immutable point-in-time daily-bar snapshot."""
+    if provider != "synthetic":
+        raise typer.BadParameter("only the synthetic provider is enabled in this phase")
+    paths, _, _ = _load_paths(config, project_root)
+    result = SnapshotBuilder(
+        snapshot_root=paths.artifact_dir / "data" / "snapshots"
+    ).build_daily_bars(
+        SyntheticMarketDataProvider(),
+        as_of=_parse_datetime(as_of),
+    )
+    action = "reused" if result.reused else "created"
+    typer.echo(f"snapshot {action}: {result.manifest.snapshot_id}")
+    typer.echo(f"visible_rows: {result.manifest.visible_rows}")
+    typer.echo(f"manifest.json: {result.manifest_path}")
 
 
 @data_app.command("convert")
