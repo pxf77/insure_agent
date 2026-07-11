@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +11,9 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from quant_agent.data.quality import evaluate_daily_bar_quality
-from quant_agent.data.snapshot import SnapshotBuilder
+from quant_agent.data.snapshot import SnapshotBuildResult, SnapshotBuilder
+
+TamperMode = Literal["artifact", "manifest_path", "manifest_provenance", "extra_file"]
 
 
 class DataEvalCase(BaseModel):
@@ -25,7 +28,9 @@ class DataEvalCase(BaseModel):
     expected_visible_rows: int | None = Field(default=None, ge=0)
     expected_symbols: list[str] | None = None
     repeat: bool = False
-    tamper: bool = False
+    tamper: TamperMode | None = None
+    variant_rows: list[dict[str, Any]] | None = None
+    expect_distinct_snapshot: bool = False
     error_contains: str | None = None
     tags: list[str] = Field(default_factory=list)
     severity: str = "normal"
@@ -103,29 +108,65 @@ def _parse_as_of(value: str | None) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
+def _write_manifest(result: SnapshotBuildResult, payload: dict[str, Any]) -> None:
+    result.manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+
+
+def _apply_tamper(result: SnapshotBuildResult, mode: TamperMode) -> None:
+    if mode == "artifact":
+        result.normalized_path.write_text("tampered\n", encoding="utf-8")
+        return
+    if mode == "extra_file":
+        (result.snapshot_dir / "unexpected.txt").write_text("unexpected\n", encoding="utf-8")
+        return
+
+    payload = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    if mode == "manifest_path":
+        payload["files"][0]["path"] = "../../outside"
+    elif mode == "manifest_provenance":
+        payload["provider_version"] = "999"
+    _write_manifest(result, payload)
+
+
+def _assert_snapshot_expectations(case: DataEvalCase, result: SnapshotBuildResult) -> None:
+    if case.expected_visible_rows is not None:
+        if result.manifest.visible_rows != case.expected_visible_rows:
+            raise AssertionError(
+                f"visible_rows={result.manifest.visible_rows}, "
+                f"expected={case.expected_visible_rows}"
+            )
+    if case.expected_symbols is not None:
+        if result.manifest.symbols != sorted(case.expected_symbols):
+            raise AssertionError(
+                f"symbols={result.manifest.symbols}, expected={sorted(case.expected_symbols)}"
+            )
+
+
 def _evaluate_snapshot(case: DataEvalCase) -> DataEvalOutcome:
     try:
         with tempfile.TemporaryDirectory(prefix="quant-agent-data-eval-") as temporary:
             builder = SnapshotBuilder(snapshot_root=Path(temporary) / "snapshots")
+            as_of = _parse_as_of(case.as_of)
             provider = _RowsProvider(case.rows)
-            result = builder.build_daily_bars(provider, as_of=_parse_as_of(case.as_of))
-            if case.tamper:
-                result.normalized_path.write_text("tampered\n", encoding="utf-8")
-                builder.build_daily_bars(provider, as_of=_parse_as_of(case.as_of))
+            result = builder.build_daily_bars(provider, as_of=as_of)
+            _assert_snapshot_expectations(case, result)
+
+            if case.tamper is not None:
+                _apply_tamper(result, case.tamper)
+                builder.build_daily_bars(provider, as_of=as_of)
             if case.repeat:
-                repeated = builder.build_daily_bars(provider, as_of=_parse_as_of(case.as_of))
+                repeated = builder.build_daily_bars(provider, as_of=as_of)
                 if repeated.manifest.snapshot_id != result.manifest.snapshot_id or not repeated.reused:
                     raise AssertionError("repeated snapshot was not deterministically reused")
-            if case.expected_visible_rows is not None:
-                if result.manifest.visible_rows != case.expected_visible_rows:
+            if case.variant_rows is not None:
+                variant = builder.build_daily_bars(_RowsProvider(case.variant_rows), as_of=as_of)
+                distinct = variant.manifest.snapshot_id != result.manifest.snapshot_id
+                if distinct != case.expect_distinct_snapshot:
                     raise AssertionError(
-                        f"visible_rows={result.manifest.visible_rows}, "
-                        f"expected={case.expected_visible_rows}"
-                    )
-            if case.expected_symbols is not None:
-                if result.manifest.symbols != sorted(case.expected_symbols):
-                    raise AssertionError(
-                        f"symbols={result.manifest.symbols}, expected={sorted(case.expected_symbols)}"
+                        f"distinct_snapshot={distinct}, expected={case.expect_distinct_snapshot}"
                     )
     except (AssertionError, ValueError) as exc:
         if case.expect_success:
@@ -135,7 +176,9 @@ def _evaluate_snapshot(case: DataEvalCase) -> DataEvalOutcome:
                 action=case.action,
                 details=str(exc),
             )
-        matches_error = case.error_contains is None or case.error_contains.lower() in str(exc).lower()
+        matches_error = (
+            case.error_contains is None or case.error_contains.lower() in str(exc).lower()
+        )
         return DataEvalOutcome(
             case_id=case.id,
             passed=matches_error,
