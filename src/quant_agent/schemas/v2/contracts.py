@@ -7,7 +7,6 @@ from typing import Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
 from quant_agent.schemas.v2.primitives import (
     AwareDateTime,
     InstrumentId,
@@ -163,7 +162,8 @@ class RiskDecisionV2(BaseModel):
             raise ValueError("non-rejected decision cannot contain a REJECT rule result")
 
         if self.decision == RiskDecisionType.APPROVE:
-            if RuleOutcome.ADJUST in outcomes or any(position.adjusted for position in self.positions):
+            has_adjusted_positions = any(position.adjusted for position in self.positions)
+            if RuleOutcome.ADJUST in outcomes or has_adjusted_positions:
                 raise ValueError("approved decision cannot contain adjustments")
             return self
 
