@@ -1,0 +1,235 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import tempfile
+from pathlib import Path
+from typing import cast
+from uuid import uuid4
+
+import yaml
+
+from quant_agent.risk.approval_store import ApprovalState, ApprovalStore
+from quant_agent.risk.kill_switch_store import KillSwitchState, KillSwitchStore
+from quant_agent.risk.v2_engine import DeterministicRiskEngine
+from quant_agent.risk.v2_models import RiskContext, RiskPolicy
+from quant_agent.schemas.v2 import RiskDecisionV2, TargetPortfolio
+
+_REQUIRED_FILES = {
+    "target_portfolio.json",
+    "risk_context.json",
+    "risk_policy.yaml",
+    "kill_switch_state.json",
+    "approval_state.json",
+    "risk_decision.json",
+}
+
+
+def _canonical_json(payload: object) -> bytes:
+    text = json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    return text.encode("utf-8")
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _safe_component(value: str) -> str:
+    return "".join(
+        character if character.isalnum() or character in "_.-" else "_"
+        for character in value
+    )
+
+
+def _decision_id(identity: dict[str, str]) -> str:
+    return f"risk-{_sha256(_canonical_json(identity))[:20]}"
+
+
+class RiskDecisionService:
+    """Persist deterministic risk decisions with complete trusted provenance."""
+
+    def __init__(
+        self,
+        *,
+        artifact_root: str | Path,
+        kill_switch_path: str | Path,
+        approval_path: str | Path,
+    ):
+        self.artifact_root = Path(artifact_root)
+        self.kill_switch_store = KillSwitchStore(kill_switch_path)
+        self.approval_store = ApprovalStore(approval_path)
+
+    def evaluate_files(
+        self,
+        *,
+        target_path: str | Path,
+        context_path: str | Path,
+        policy_path: str | Path,
+    ) -> tuple[RiskDecisionV2, Path, bool]:
+        target_content = Path(target_path).read_bytes()
+        context_content = Path(context_path).read_bytes()
+        policy_content = Path(policy_path).read_bytes()
+        target = TargetPortfolio.model_validate_json(target_content)
+        context = RiskContext.model_validate_json(context_content)
+        policy_payload = yaml.safe_load(policy_content.decode("utf-8")) or {}
+        policy = RiskPolicy.model_validate(policy_payload)
+        kill_switch_state = self.kill_switch_store.read()
+        approval_state = self.approval_store.read()
+        kill_switch_content = _canonical_json(kill_switch_state.model_dump(mode="json"))
+        approval_content = _canonical_json(approval_state.model_dump(mode="json"))
+        decision = DeterministicRiskEngine(
+            policy=policy,
+            kill_switch_store=self.kill_switch_store,
+            approval_store=self.approval_store,
+        ).evaluate(
+            target,
+            context,
+            kill_switch_state=kill_switch_state,
+            approval_state=approval_state,
+        )
+        decision_content = _canonical_json(decision.model_dump(mode="json"))
+        identity = {
+            "schema_version": "1.0",
+            "target_sha256": _sha256(target_content),
+            "context_sha256": _sha256(context_content),
+            "policy_sha256": _sha256(policy_content),
+            "kill_switch_state_sha256": _sha256(kill_switch_content),
+            "approval_state_sha256": _sha256(approval_content),
+            "decision_sha256": _sha256(decision_content),
+        }
+        decision_id = _decision_id(identity)
+        artifact_dir = (
+            self.artifact_root
+            / "risk_v2"
+            / _safe_component(target.run_id)
+            / decision_id
+        )
+        if artifact_dir.exists():
+            self._verify_existing(artifact_dir, decision_id)
+            existing = RiskDecisionV2.model_validate_json(
+                (artifact_dir / "risk_decision.json").read_text(encoding="utf-8")
+            )
+            return existing, artifact_dir, True
+
+        files = {
+            "target_portfolio.json": target_content,
+            "risk_context.json": context_content,
+            "risk_policy.yaml": policy_content,
+            "kill_switch_state.json": kill_switch_content,
+            "approval_state.json": approval_content,
+            "risk_decision.json": decision_content,
+        }
+        temporary = artifact_dir.parent / f".{decision_id}.{uuid4().hex}.tmp"
+        try:
+            temporary.mkdir(parents=True, exist_ok=False)
+            for relative_path, content in files.items():
+                (temporary / relative_path).write_bytes(content)
+            manifest = {
+                "schema_version": "1.0",
+                "decision_id": decision_id,
+                "target_run_id": target.run_id,
+                "policy_version": policy.policy_version,
+                "identity": identity,
+                "files": {
+                    name: _sha256(content)
+                    for name, content in sorted(files.items())
+                },
+            }
+            (temporary / "manifest.json").write_bytes(_canonical_json(manifest))
+            artifact_dir.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                os.rename(temporary, artifact_dir)
+            except FileExistsError:
+                shutil.rmtree(temporary)
+                self._verify_existing(artifact_dir, decision_id)
+                existing = RiskDecisionV2.model_validate_json(
+                    (artifact_dir / "risk_decision.json").read_text(encoding="utf-8")
+                )
+                return existing, artifact_dir, True
+        except Exception:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+            raise
+        return decision, artifact_dir, False
+
+    @staticmethod
+    def _verify_existing(artifact_dir: Path, decision_id: str) -> None:
+        manifest_path = artifact_dir / "manifest.json"
+        if manifest_path.is_symlink() or not manifest_path.is_file():
+            raise ValueError("risk artifact directory is incomplete or unsafe")
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if payload.get("decision_id") != decision_id or artifact_dir.name != decision_id:
+            raise ValueError("risk artifact decision_id mismatch")
+        expected_hashes = cast(dict[str, str], payload.get("files", {}))
+        if set(expected_hashes) != _REQUIRED_FILES:
+            raise ValueError("risk artifact manifest contains an unexpected artifact set")
+        actual_files: set[str] = set()
+        for path in artifact_dir.rglob("*"):
+            if path.is_symlink():
+                raise ValueError(f"risk artifact contains a symbolic link: {path}")
+            if path.is_file():
+                actual_files.add(path.relative_to(artifact_dir).as_posix())
+        if actual_files != _REQUIRED_FILES | {"manifest.json"}:
+            raise ValueError("risk artifact contains missing or unexpected files")
+        for name, expected_hash in expected_hashes.items():
+            path = artifact_dir / name
+            if not path.is_file() or _sha256(path.read_bytes()) != expected_hash:
+                raise ValueError(f"risk artifact failed integrity check: {name}")
+
+        recomputed = {
+            "schema_version": "1.0",
+            "target_sha256": _sha256((artifact_dir / "target_portfolio.json").read_bytes()),
+            "context_sha256": _sha256((artifact_dir / "risk_context.json").read_bytes()),
+            "policy_sha256": _sha256((artifact_dir / "risk_policy.yaml").read_bytes()),
+            "kill_switch_state_sha256": _sha256(
+                (artifact_dir / "kill_switch_state.json").read_bytes()
+            ),
+            "approval_state_sha256": _sha256(
+                (artifact_dir / "approval_state.json").read_bytes()
+            ),
+            "decision_sha256": _sha256((artifact_dir / "risk_decision.json").read_bytes()),
+        }
+        if payload.get("identity") != recomputed or _decision_id(recomputed) != decision_id:
+            raise ValueError("risk artifact failed identity verification")
+
+        target = TargetPortfolio.model_validate_json(
+            (artifact_dir / "target_portfolio.json").read_text(encoding="utf-8")
+        )
+        context = RiskContext.model_validate_json(
+            (artifact_dir / "risk_context.json").read_text(encoding="utf-8")
+        )
+        policy_payload = yaml.safe_load(
+            (artifact_dir / "risk_policy.yaml").read_text(encoding="utf-8")
+        ) or {}
+        policy = RiskPolicy.model_validate(policy_payload)
+        switch_state = KillSwitchState.model_validate_json(
+            (artifact_dir / "kill_switch_state.json").read_text(encoding="utf-8")
+        )
+        approval_state = ApprovalState.model_validate_json(
+            (artifact_dir / "approval_state.json").read_text(encoding="utf-8")
+        )
+        with tempfile.TemporaryDirectory(
+            prefix=f".{decision_id}.replay-",
+            dir=artifact_dir.parent,
+        ) as temporary:
+            replay_switches = KillSwitchStore(Path(temporary) / "switches.json")
+            replay_approvals = ApprovalStore(Path(temporary) / "approvals.json")
+            replay_switches.write(switch_state)
+            replay_approvals.write(approval_state)
+            replayed = DeterministicRiskEngine(
+                policy=policy,
+                kill_switch_store=replay_switches,
+                approval_store=replay_approvals,
+            ).evaluate(
+                target,
+                context,
+                kill_switch_state=switch_state,
+                approval_state=approval_state,
+            )
+        persisted_decision = RiskDecisionV2.model_validate_json(
+            (artifact_dir / "risk_decision.json").read_text(encoding="utf-8")
+        )
+        if replayed != persisted_decision:
+            raise ValueError("risk decision failed deterministic replay")
