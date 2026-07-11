@@ -20,7 +20,7 @@ class EventEnvelope(BaseModel):
     occurred_at: AwareDateTime = Field(
         default_factory=lambda: datetime.now(timezone.utc)
     )
-    correlation_id: UUID = Field(default_factory=uuid4)
+    correlation_id: UUID
     causation_id: UUID | None = None
     producer: str = Field(min_length=1, max_length=100)
     payload: dict[str, Any] = Field(default_factory=dict)
