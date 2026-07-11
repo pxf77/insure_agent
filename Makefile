@@ -1,9 +1,12 @@
-.PHONY: init install test lint data-pull data-convert research risk paper report
+.PHONY: doctor init install test lint data-pull data-convert research risk paper report
 
 PYTHON ?= python
 
 install:
 	$(PYTHON) -m pip install -e .[dev]
+
+doctor:
+	$(PYTHON) -m quant_agent.cli doctor --profile mvp --config configs/env/dev.yaml
 
 init:
 	$(PYTHON) scripts/init_project.py --config configs/env/dev.yaml
