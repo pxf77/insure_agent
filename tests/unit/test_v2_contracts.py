@@ -14,6 +14,8 @@ from quant_agent.schemas.v2 import (
     TargetPortfolio,
 )
 
+CORRELATION_ID = "11111111-1111-4111-8111-111111111111"
+
 
 def test_instrument_id_normalizes_and_serializes_as_string() -> None:
     instrument = InstrumentId.model_validate("sh600519")
@@ -32,6 +34,7 @@ def test_event_envelope_normalizes_aware_timestamp_to_utc() -> None:
         {
             "event_type": "risk.completed",
             "occurred_at": "2026-07-11T09:00:00+08:00",
+            "correlation_id": CORRELATION_ID,
             "producer": "risk-service",
             "payload": {},
         }
@@ -46,6 +49,19 @@ def test_event_envelope_rejects_naive_timestamp() -> None:
             {
                 "event_type": "risk.completed",
                 "occurred_at": "2026-07-11T09:00:00",
+                "correlation_id": CORRELATION_ID,
+                "producer": "risk-service",
+                "payload": {},
+            }
+        )
+
+
+def test_event_envelope_requires_correlation_id() -> None:
+    with pytest.raises(ValidationError, match="correlation_id"):
+        EventEnvelope.model_validate(
+            {
+                "event_type": "risk.completed",
+                "occurred_at": "2026-07-11T01:00:00Z",
                 "producer": "risk-service",
                 "payload": {},
             }
@@ -83,31 +99,49 @@ def test_research_spec_rejects_overlapping_splits() -> None:
         ResearchSpec.model_validate(payload)
 
 
-def test_target_portfolio_rejects_normalized_duplicate_instruments() -> None:
-    with pytest.raises(ValidationError, match="duplicate"):
-        TargetPortfolio.model_validate(
+def _target_portfolio_payload() -> dict[str, object]:
+    return {
+        "run_id": "run-1",
+        "strategy_id": "strategy-1",
+        "trade_date": "2026-07-10",
+        "generated_at": "2026-07-10T07:00:00Z",
+        "universe": "CSI300",
+        "positions": [
             {
-                "run_id": "run-1",
-                "strategy_id": "strategy-1",
-                "trade_date": "2026-07-10",
-                "generated_at": "2026-07-10T07:00:00Z",
-                "universe": "CSI300",
-                "positions": [
-                    {
-                        "instrument": "600519",
-                        "target_weight": "0.2",
-                        "score": "1",
-                        "rank": 1,
-                    },
-                    {
-                        "instrument": "SH600519",
-                        "target_weight": "0.1",
-                        "score": "0.5",
-                        "rank": 2,
-                    },
-                ],
-            }
-        )
+                "instrument": "600519",
+                "target_weight": "0.2",
+                "score": "1",
+                "rank": 1,
+            },
+            {
+                "instrument": "000001.SZ",
+                "target_weight": "0.1",
+                "score": "0.5",
+                "rank": 2,
+            },
+        ],
+    }
+
+
+def test_target_portfolio_rejects_normalized_duplicate_instruments() -> None:
+    payload = _target_portfolio_payload()
+    payload["positions"] = [
+        {"instrument": "600519", "target_weight": "0.2", "score": "1", "rank": 1},
+        {"instrument": "SH600519", "target_weight": "0.1", "score": "0.5", "rank": 2},
+    ]
+
+    with pytest.raises(ValidationError, match="duplicate instruments"):
+        TargetPortfolio.model_validate(payload)
+
+
+def test_target_portfolio_rejects_duplicate_ranks() -> None:
+    payload = _target_portfolio_payload()
+    positions = payload["positions"]
+    assert isinstance(positions, list)
+    positions[1]["rank"] = 1
+
+    with pytest.raises(ValidationError, match="duplicate ranks"):
+        TargetPortfolio.model_validate(payload)
 
 
 def test_risk_decision_rejects_inconsistent_rejection() -> None:
@@ -124,6 +158,47 @@ def test_risk_decision_rejects_inconsistent_rejection() -> None:
                 "rule_results": [],
             }
         )
+
+
+def test_risk_rejection_requires_deterministic_reason() -> None:
+    with pytest.raises(ValidationError, match="requires at least one REJECT"):
+        RiskDecisionV2.model_validate(
+            {
+                "run_id": "run-1",
+                "strategy_id": "strategy-1",
+                "policy_version": "paper-v1",
+                "decision": "REJECT",
+                "approved": False,
+                "decided_at": "2026-07-10T07:00:00Z",
+                "positions": [],
+                "rule_results": [],
+            }
+        )
+
+
+def test_risk_rejection_with_reason_is_valid() -> None:
+    decision = RiskDecisionV2.model_validate(
+        {
+            "run_id": "run-1",
+            "strategy_id": "strategy-1",
+            "policy_version": "paper-v1",
+            "decision": "REJECT",
+            "approved": False,
+            "decided_at": "2026-07-10T07:00:00Z",
+            "positions": [],
+            "rule_results": [
+                {
+                    "rule_id": "kill-switch",
+                    "rule_version": "1",
+                    "outcome": "REJECT",
+                    "reason_code": "KILL_SWITCH_ACTIVE",
+                    "message": "global kill switch is active",
+                }
+            ],
+        }
+    )
+
+    assert not decision.approved
 
 
 def _order_payload() -> dict[str, object]:
@@ -153,6 +228,15 @@ def test_order_intent_enforces_buy_lot_and_decimal_price() -> None:
         OrderIntent.model_validate(invalid)
 
 
+def test_order_intent_rejects_client_lot_size_override() -> None:
+    payload = _order_payload()
+    payload["quantity"] = 50
+    payload["lot_size"] = 1
+
+    with pytest.raises(ValidationError, match="Input should be 100"):
+        OrderIntent.model_validate(payload)
+
+
 def test_existing_v1_contract_remains_numeric_and_readable() -> None:
     request = TargetPositionRequest(
         run_id="run-1",
@@ -160,7 +244,9 @@ def test_existing_v1_contract_remains_numeric_and_readable() -> None:
         trade_date="2026-07-10",
         generated_at=(datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(),
         universe="CSI300",
-        positions=[TargetPosition(symbol="600519.SH", target_weight=0.2, score=1.0, rank=1)],
+        positions=[
+            TargetPosition(symbol="600519.SH", target_weight=0.2, score=1.0, rank=1)
+        ],
     )
 
     payload = request.model_dump(mode="json")
