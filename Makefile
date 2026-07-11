@@ -13,6 +13,7 @@ contracts-export:
 
 eval-contracts:
 	$(PYTHON) -m quant_agent.cli eval contracts --suite evals/contracts/v0.1.yaml
+	$(PYTHON) -m quant_agent.cli eval contracts --suite evals/contracts/v0.1-hardening.yaml
 
 init:
 	$(PYTHON) scripts/init_project.py --config configs/env/dev.yaml
