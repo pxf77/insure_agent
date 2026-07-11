@@ -41,7 +41,9 @@ jobs:
         run: pytest -q
 
       - name: Run contract evaluations
-        run: python -m quant_agent.cli eval contracts --suite evals/contracts/v0.1.yaml
+        run: |
+          python -m quant_agent.cli eval contracts --suite evals/contracts/v0.1.yaml
+          python -m quant_agent.cli eval contracts --suite evals/contracts/v0.1-hardening.yaml
 
       - name: Verify contract schema export
         run: python -m quant_agent.cli contracts export --output /tmp/quant-agent-contracts
