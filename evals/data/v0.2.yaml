@@ -1,0 +1,229 @@
+suite_version: "0.2"
+valid_row: &valid_row
+  trade_date: "2026-05-20"
+  symbol: "SH600519"
+  open: 100.0
+  high: 110.0
+  low: 99.0
+  close: 105.0
+  volume: 1000
+  amount: 105000.0
+  available_at: "2026-05-20T15:05:00+08:00"
+cases:
+  - id: data-quality-valid-row
+    action: quality
+    rows:
+      - *valid_row
+    expect_success: true
+    tags: [quality, baseline]
+    severity: critical
+
+  - id: data-quality-normalized-duplicate
+    action: quality
+    rows:
+      - *valid_row
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00+08:00"
+    expect_success: false
+    expected_checks: [DUPLICATE_PRIMARY_KEY]
+    tags: [quality, normalization, adversarial]
+    severity: critical
+
+  - id: data-quality-invalid-ohlc
+    action: quality
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 101.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00+08:00"
+    expect_success: false
+    expected_checks: [INVALID_OHLC]
+    tags: [quality, ohlc, adversarial]
+    severity: critical
+
+  - id: data-quality-negative-volume
+    action: quality
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: -1
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00+08:00"
+    expect_success: false
+    expected_checks: [NEGATIVE_ACTIVITY]
+    tags: [quality, activity, adversarial]
+    severity: critical
+
+  - id: data-quality-invalid-symbol
+    action: quality
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "NOT-A-SYMBOL"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00+08:00"
+    expect_success: false
+    expected_checks: [INVALID_SYMBOL]
+    tags: [quality, symbol, adversarial]
+    severity: critical
+
+  - id: data-quality-naive-available-at
+    action: quality
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00"
+    expect_success: false
+    expected_checks: [NAIVE_AVAILABLE_AT]
+    tags: [quality, time, adversarial]
+    severity: critical
+
+  - id: pit-excludes-future-known-row
+    action: snapshot
+    rows:
+      - *valid_row
+      - trade_date: "2026-05-21"
+        symbol: "000001.SZ"
+        open: 10.0
+        high: 11.0
+        low: 9.0
+        close: 10.5
+        volume: 2000
+        amount: 21000.0
+        available_at: "2026-05-21T15:05:00+08:00"
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: true
+    expected_visible_rows: 1
+    expected_symbols: [600519.SH]
+    tags: [pit, future-knowledge]
+    severity: critical
+
+  - id: pit-naive-as-of-rejected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00"
+    expect_success: false
+    error_contains: "timezone"
+    tags: [pit, time, adversarial]
+    severity: critical
+
+  - id: pit-naive-source-availability-rejected
+    action: snapshot
+    rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00"
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    error_contains: "NAIVE_AVAILABLE_AT"
+    tags: [pit, source-time, adversarial]
+    severity: critical
+
+  - id: snapshot-id-deterministic-and-reused
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: true
+    expected_visible_rows: 1
+    expected_symbols: [600519.SH]
+    repeat: true
+    tags: [snapshot, determinism]
+    severity: critical
+
+  - id: snapshot-artifact-tamper-detected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: artifact
+    error_contains: "integrity check"
+    tags: [snapshot, integrity, adversarial]
+    severity: critical
+
+  - id: snapshot-manifest-path-traversal-rejected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: manifest_path
+    error_contains: "safe and relative"
+    tags: [snapshot, path-traversal, adversarial]
+    severity: critical
+
+  - id: snapshot-manifest-provenance-tamper-detected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: manifest_provenance
+    error_contains: "identity verification"
+    tags: [snapshot, provenance, adversarial]
+    severity: critical
+
+  - id: snapshot-extra-file-injection-detected
+    action: snapshot
+    rows:
+      - *valid_row
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: false
+    tamper: extra_file
+    error_contains: "unexpected files"
+    tags: [snapshot, injection, adversarial]
+    severity: critical
+
+  - id: snapshot-raw-representation-affects-identity
+    action: snapshot
+    rows:
+      - *valid_row
+    variant_rows:
+      - trade_date: "2026-05-20"
+        symbol: "600519.SH"
+        open: 100.0
+        high: 110.0
+        low: 99.0
+        close: 105.0
+        volume: 1000
+        amount: 105000.0
+        available_at: "2026-05-20T15:05:00+08:00"
+    as_of: "2026-05-20T16:00:00+08:00"
+    expect_success: true
+    expect_distinct_snapshot: true
+    tags: [snapshot, provenance, raw]
+    severity: critical
