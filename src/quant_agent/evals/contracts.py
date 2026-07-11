@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+
 from quant_agent.schemas.exporter import CONTRACT_MODELS
 
 
