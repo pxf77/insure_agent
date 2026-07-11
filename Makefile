@@ -1,4 +1,4 @@
-.PHONY: doctor contracts-export eval-contracts eval-data init install test lint data-pull data-snapshot data-convert research risk paper report
+.PHONY: doctor contracts-export eval-contracts eval-data eval-research init install test lint data-pull data-snapshot data-research-snapshot data-convert research research-snapshot risk paper report
 
 PYTHON ?= python
 
@@ -18,6 +18,9 @@ eval-contracts:
 eval-data:
 	$(PYTHON) -m quant_agent.cli eval data --suite evals/data/v0.2.yaml
 
+eval-research:
+	$(PYTHON) -m quant_agent.cli eval research --suite evals/research/v0.3.yaml
+
 init:
 	$(PYTHON) scripts/init_project.py --config configs/env/dev.yaml
 
@@ -34,11 +37,17 @@ data-pull:
 data-snapshot:
 	$(PYTHON) -m quant_agent.cli data snapshot --config configs/env/dev.yaml
 
+data-research-snapshot:
+	$(PYTHON) -m quant_agent.cli data snapshot --provider synthetic-research --config configs/env/dev.yaml
+
 data-convert:
 	$(PYTHON) scripts/convert_to_qlib.py --config configs/env/dev.yaml
 
 research:
 	$(PYTHON) scripts/run_qlib_backtest.py --env-config configs/env/dev.yaml
+
+research-snapshot:
+	@echo "Run: quant-agent research snapshot --snapshot <snapshot_dir>"
 
 risk:
 	$(PYTHON) scripts/validate_targets.py --env-config configs/env/dev.yaml
