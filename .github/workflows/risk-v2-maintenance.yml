@@ -1,0 +1,49 @@
+name: Risk v2 one-time maintenance
+
+on:
+  push:
+    branches:
+      - codex/qta-080-risk-v2
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@v4
+        with:
+          ref: codex/qta-080-risk-v2
+          fetch-depth: 0
+
+      - name: Apply hardened replacements
+        run: |
+          cp .maintenance/risk_v2_engine.py.new src/quant_agent/risk/v2_engine.py
+          cp .maintenance/risk_v2_service.py.new src/quant_agent/risk/v2_service.py
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('tests/unit/test_risk_v2.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              'from quant_agent.risk.v2_models import RiskContext, RiskPolicy\n',
+              'from quant_agent.risk.v2_models import KillSwitchScope, RiskContext, RiskPolicy\n',
+          )
+          text = text.replace('scope="ACCOUNT",', 'scope=KillSwitchScope.ACCOUNT,')
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm -rf .maintenance
+          rm .github/workflows/risk-v2-maintenance.yml
+
+      - name: Commit maintenance result
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(risk): harden deterministic engine and artifacts"
+          git push origin HEAD:codex/qta-080-risk-v2
