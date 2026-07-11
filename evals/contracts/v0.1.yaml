@@ -1,0 +1,320 @@
+suite_version: "0.1"
+cases:
+  - id: instrument-plain-sh
+    model: instrument-id-1.0
+    payload: "600519"
+    expect_valid: true
+    expected_output: "600519.SH"
+    tags: [instrument, normalization]
+    severity: critical
+
+  - id: instrument-prefix-sz
+    model: instrument-id-1.0
+    payload: "sz000001"
+    expect_valid: true
+    expected_output: "000001.SZ"
+    tags: [instrument, normalization]
+
+  - id: instrument-invalid-length
+    model: instrument-id-1.0
+    payload: "60051"
+    expect_valid: false
+    error_contains: "invalid A-share symbol"
+    tags: [instrument, adversarial]
+    severity: critical
+
+  - id: instrument-rejects-numeric-input
+    model: instrument-id-1.0
+    payload: 1
+    expect_valid: false
+    error_contains: "must be a string"
+    tags: [instrument, leading-zero]
+    severity: critical
+
+  - id: event-aware-time
+    model: event-envelope-1.0
+    payload:
+      event_type: "research.completed"
+      occurred_at: "2026-07-11T09:00:00+08:00"
+      correlation_id: "11111111-1111-4111-8111-111111111111"
+      producer: "research-service"
+      payload:
+        run_id: "run-1"
+    expect_valid: true
+    tags: [event, time]
+
+  - id: event-naive-time-rejected
+    model: event-envelope-1.0
+    payload:
+      event_type: "research.completed"
+      occurred_at: "2026-07-11T09:00:00"
+      correlation_id: "11111111-1111-4111-8111-111111111111"
+      producer: "research-service"
+      payload: {}
+    expect_valid: false
+    error_contains: "timezone"
+    tags: [event, time, adversarial]
+    severity: critical
+
+  - id: research-ordered-splits
+    model: research-spec-2.0
+    payload:
+      strategy_id: "lgb-alpha158-v2"
+      data_snapshot_id: "snapshot-20260710"
+      universe: "CSI300"
+      benchmark: "SH000300"
+      feature_set: "Alpha158"
+      model_name: "LightGBM"
+      train: {start: "2018-01-01", end: "2022-12-31"}
+      validation: {start: "2023-01-01", end: "2023-12-31"}
+      test: {start: "2024-01-01", end: "2025-12-31"}
+      random_seed: 42
+      transaction_cost_bps: "12.5"
+      created_at: "2026-07-11T01:00:00Z"
+    expect_valid: true
+    tags: [research, split]
+    severity: critical
+
+  - id: research-overlapping-train-validation
+    model: research-spec-2.0
+    payload:
+      strategy_id: "bad-split"
+      data_snapshot_id: "snapshot-1"
+      universe: "CSI300"
+      feature_set: "Alpha158"
+      model_name: "LightGBM"
+      train: {start: "2020-01-01", end: "2023-06-30"}
+      validation: {start: "2023-06-01", end: "2023-12-31"}
+      test: {start: "2024-01-01", end: "2024-12-31"}
+      random_seed: 42
+      created_at: "2026-07-11T01:00:00Z"
+    expect_valid: false
+    error_contains: "train range"
+    tags: [research, leakage, adversarial]
+    severity: critical
+
+  - id: research-overlapping-validation-test
+    model: research-spec-2.0
+    payload:
+      strategy_id: "bad-split-2"
+      data_snapshot_id: "snapshot-1"
+      universe: "CSI300"
+      feature_set: "Alpha158"
+      model_name: "LightGBM"
+      train: {start: "2020-01-01", end: "2022-12-31"}
+      validation: {start: "2023-01-01", end: "2024-06-30"}
+      test: {start: "2024-06-01", end: "2024-12-31"}
+      random_seed: 42
+      created_at: "2026-07-11T01:00:00Z"
+    expect_valid: false
+    error_contains: "validation range"
+    tags: [research, leakage, adversarial]
+    severity: critical
+
+  - id: target-portfolio-valid
+    model: target-portfolio-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      trade_date: "2026-07-10"
+      generated_at: "2026-07-10T15:10:00+08:00"
+      universe: "CSI300"
+      positions:
+        - {instrument: "600519.SH", target_weight: "0.20", score: "1.2", rank: 1}
+        - {instrument: "000001.SZ", target_weight: "0.15", score: "0.9", rank: 2}
+    expect_valid: true
+    tags: [portfolio]
+
+  - id: target-portfolio-duplicate-instrument
+    model: target-portfolio-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      trade_date: "2026-07-10"
+      generated_at: "2026-07-10T07:10:00Z"
+      universe: "CSI300"
+      positions:
+        - {instrument: "600519", target_weight: "0.20", score: "1.2", rank: 1}
+        - {instrument: "SH600519", target_weight: "0.15", score: "0.9", rank: 2}
+    expect_valid: false
+    error_contains: "duplicate"
+    tags: [portfolio, normalization, adversarial]
+    severity: critical
+
+  - id: target-portfolio-overweight
+    model: target-portfolio-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      trade_date: "2026-07-10"
+      generated_at: "2026-07-10T07:10:00Z"
+      universe: "CSI300"
+      positions:
+        - {instrument: "600519.SH", target_weight: "0.60", score: "1.2", rank: 1}
+        - {instrument: "000001.SZ", target_weight: "0.50", score: "0.9", rank: 2}
+    expect_valid: false
+    error_contains: "total weight"
+    tags: [portfolio, adversarial]
+    severity: critical
+
+  - id: risk-approve-consistent
+    model: risk-decision-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      policy_version: "paper-v1"
+      decision: "APPROVE"
+      approved: true
+      decided_at: "2026-07-10T07:11:00Z"
+      positions:
+        - {instrument: "600519.SH", target_weight: "0.20", adjusted: false}
+      rule_results:
+        - rule_id: "kill-switch"
+          rule_version: "1"
+          outcome: "PASS"
+          reason_code: "KILL_SWITCH_CLEAR"
+          message: "kill switch is clear"
+    expect_valid: true
+    tags: [risk]
+    severity: critical
+
+  - id: risk-reject-cannot-be-approved
+    model: risk-decision-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      policy_version: "paper-v1"
+      decision: "REJECT"
+      approved: true
+      decided_at: "2026-07-10T07:11:00Z"
+      positions: []
+      rule_results: []
+    expect_valid: false
+    error_contains: "rejected decision"
+    tags: [risk, adversarial]
+    severity: critical
+
+  - id: risk-adjust-requires-adjust-result
+    model: risk-decision-2.0
+    payload:
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      policy_version: "paper-v1"
+      decision: "ADJUST"
+      approved: true
+      decided_at: "2026-07-10T07:11:00Z"
+      positions:
+        - {instrument: "600519.SH", target_weight: "0.10", adjusted: true, reason_code: "MAX_WEIGHT"}
+      rule_results:
+        - rule_id: "position-limit"
+          rule_version: "1"
+          outcome: "WARN"
+          reason_code: "MAX_WEIGHT"
+          message: "weight warning"
+    expect_valid: false
+    error_contains: "requires at least one ADJUST"
+    tags: [risk, adversarial]
+    severity: critical
+
+  - id: order-buy-board-lot
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "run-1:600519:buy"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "BUY"
+      order_type: "LIMIT"
+      quantity: 100
+      limit_price: "1500.50"
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: true
+    tags: [order, lot]
+    severity: critical
+
+  - id: order-buy-odd-lot-rejected
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "run-1:600519:odd"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "BUY"
+      order_type: "LIMIT"
+      quantity: 50
+      limit_price: "1500.50"
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: false
+    error_contains: "multiple of lot_size"
+    tags: [order, lot, adversarial]
+    severity: critical
+
+  - id: order-sell-odd-lot-allowed
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "run-1:600519:sell"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "SELL"
+      order_type: "LIMIT"
+      quantity: 50
+      limit_price: "1500.50"
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: true
+    tags: [order, lot]
+
+  - id: order-limit-price-required
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "run-1:600519:noprice"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "BUY"
+      order_type: "LIMIT"
+      quantity: 100
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: false
+    error_contains: "requires limit_price"
+    tags: [order, adversarial]
+    severity: critical
+
+  - id: order-market-price-forbidden
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "run-1:600519:market"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "BUY"
+      order_type: "MARKET"
+      quantity: 100
+      limit_price: "1500.50"
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: false
+    error_contains: "must not include limit_price"
+    tags: [order, adversarial]
+
+  - id: order-idempotency-key-too-short
+    model: order-intent-2.0
+    payload:
+      idempotency_key: "short"
+      run_id: "run-1"
+      strategy_id: "strategy-1"
+      account_id: "paper-account"
+      instrument: "600519.SH"
+      side: "BUY"
+      order_type: "LIMIT"
+      quantity: 100
+      limit_price: "1500.50"
+      created_at: "2026-07-10T07:12:00Z"
+    expect_valid: false
+    error_contains: "at least 8 characters"
+    tags: [order, idempotency, adversarial]
+    severity: critical

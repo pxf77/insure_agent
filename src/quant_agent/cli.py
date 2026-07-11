@@ -11,11 +11,13 @@ from quant_agent.common.doctor import DoctorProfile, render_doctor_report, run_d
 from quant_agent.common.paths import ProjectPaths
 from quant_agent.common.run_index import RunIndex
 from quant_agent.data.qlib_converter import QlibConverter
+from quant_agent.evals.contracts import render_contract_eval_report, run_contract_evals
 from quant_agent.execution.order_router import PaperTradingRunner
 from quant_agent.research.qlib_runner import QlibRunner
 from quant_agent.research.report_writer import ReportWriter
 from quant_agent.risk.engine import RiskEngine
 from quant_agent.risk.reports import summarize_risk_decision
+from quant_agent.schemas.exporter import export_contract_schemas
 
 app = typer.Typer(help="A-share quant agent command line interface.")
 data_app = typer.Typer(help="Data ingestion and conversion commands.")
@@ -24,12 +26,16 @@ risk_app = typer.Typer(help="Risk validation commands.")
 paper_app = typer.Typer(help="Paper trading commands.")
 report_app = typer.Typer(help="Report commands.")
 run_app = typer.Typer(help="Pipeline commands.")
+contracts_app = typer.Typer(help="Versioned contract commands.")
+eval_app = typer.Typer(help="Evaluation suite commands.")
 app.add_typer(data_app, name="data")
 app.add_typer(research_app, name="research")
 app.add_typer(risk_app, name="risk")
 app.add_typer(paper_app, name="paper")
 app.add_typer(report_app, name="report")
 app.add_typer(run_app, name="run")
+app.add_typer(contracts_app, name="contracts")
+app.add_typer(eval_app, name="eval")
 
 
 def _load_paths(config_path: Path, project_root: Path) -> tuple[ProjectPaths, str, bool]:
@@ -90,6 +96,31 @@ def init(
     paths, _, _ = _load_paths(config, project_root)
     paths.ensure()
     typer.echo(f"initialized artifacts under {paths.artifact_dir}")
+
+
+@contracts_app.command("export")
+def contracts_export(
+    output: Path = Path("artifacts/contracts"),
+) -> None:
+    """Export deterministic JSON Schemas for versioned contracts."""
+    result = export_contract_schemas(output)
+    typer.echo(f"exported {len(result.schema_paths)} contract schemas")
+    typer.echo(f"index.json: {result.index_path}")
+
+
+@eval_app.command("contracts")
+def eval_contracts_command(
+    suite: Path = Path("evals/contracts/v0.1.yaml"),
+    json_output: bool = typer.Option(False, "--json", help="Emit machine-readable JSON."),
+) -> None:
+    """Run the versioned contract evaluation suite."""
+    report = run_contract_evals(suite)
+    if json_output:
+        typer.echo(report.model_dump_json(indent=2))
+    else:
+        typer.echo(render_contract_eval_report(report))
+    if not report.success:
+        raise typer.Exit(1)
 
 
 @data_app.command("pull")
