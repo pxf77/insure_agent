@@ -296,7 +296,9 @@ class SnapshotBuilder:
         manifest_path = snapshot_dir / "manifest.json"
         if manifest_path.is_symlink() or not manifest_path.is_file():
             raise ValueError(f"snapshot is incomplete or unsafe: {snapshot_dir}")
-        manifest = DataSnapshotManifest.model_validate_json(manifest_path.read_text(encoding="utf-8"))
+        manifest = DataSnapshotManifest.model_validate_json(
+            manifest_path.read_text(encoding="utf-8")
+        )
         if manifest.snapshot_id != snapshot_dir.name:
             raise ValueError("snapshot manifest ID does not match directory")
 
