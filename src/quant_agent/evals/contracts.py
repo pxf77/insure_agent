@@ -6,7 +6,6 @@ from typing import Any
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
-
 from quant_agent.schemas.exporter import CONTRACT_MODELS
 
 
@@ -82,7 +81,10 @@ def _evaluate_case(case: ContractEvalCase) -> ContractEvalOutcome:
                 details=str(exc),
             )
         error_text = str(exc)
-        matches_error = case.error_contains is None or case.error_contains.lower() in error_text.lower()
+        matches_error = (
+            case.error_contains is None
+            or case.error_contains.lower() in error_text.lower()
+        )
         return ContractEvalOutcome(
             case_id=case.id,
             passed=matches_error,
@@ -135,7 +137,10 @@ def render_contract_eval_report(report: ContractEvalReport) -> str:
     ]
     for outcome in report.outcomes:
         status = "PASS" if outcome.passed else "FAIL"
-        lines.append(f"[{status}] {outcome.case_id}: expected {outcome.expected}, got {outcome.actual}")
+        lines.append(
+            f"[{status}] {outcome.case_id}: expected {outcome.expected}, "
+            f"got {outcome.actual}"
+        )
         if outcome.details and not outcome.passed:
             lines.append(f"  details: {outcome.details}")
     return "\n".join(lines)
