@@ -60,10 +60,11 @@ _ALL_OPTIONAL_MODULES: tuple[tuple[str, str], ...] = (
 def _check_python() -> DoctorCheck:
     version = sys.version_info
     supported = (3, 10) <= (version.major, version.minor) < (3, 14)
+    support_label = "supported" if supported else "unsupported"
     return DoctorCheck(
         check_id="python_version",
         status=CheckStatus.PASS if supported else CheckStatus.FAIL,
-        message=f"Python {platform.python_version()} is {'supported' if supported else 'unsupported'}.",
+        message=f"Python {platform.python_version()} is {support_label}.",
         remediation=None if supported else "Install Python >=3.10,<3.14.",
     )
 
