@@ -1,0 +1,57 @@
+name: Risk v2 fixture floor fix
+
+on:
+  push:
+    branches: [codex/qta-080-risk-v2]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: codex/qta-080-risk-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Patch floor-aware fixtures
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/quant_agent/evals/risk.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '''if action == "single_weight":
+        _position(target, "600519.SH")["target_weight"] = "0.30"
+    elif action == "total_weight":
+        policy["max_total_weight"] = "0.36"
+    elif action == "industry_weight":
+        policy["max_industry_weight"] = "0.28"''',
+              '''if action == "single_weight":
+        _position(target, "600519.SH")["target_weight"] = "0.30"
+    elif action == "total_weight":
+        policy["max_total_weight"] = "0.36"
+        for item in context["current_positions"]:
+            item["sellable_weight"] = item["current_weight"]
+    elif action == "industry_weight":
+        policy["max_industry_weight"] = "0.28"
+        for item in context["current_positions"]:
+            item["sellable_weight"] = item["current_weight"]''',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
+          rm .github/workflows/risk-v2-floor-fixture-fix.yml
+      - name: Commit fixture fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "test(risk): align scaling fixtures with sellable floors"
+          git push origin HEAD:codex/qta-080-risk-v2
