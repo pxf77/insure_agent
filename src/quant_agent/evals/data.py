@@ -11,7 +11,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field
 
 from quant_agent.data.quality import evaluate_daily_bar_quality
-from quant_agent.data.snapshot import SnapshotBuildResult, SnapshotBuilder
+from quant_agent.data.snapshot import SnapshotBuilder, SnapshotBuildResult
 
 TamperMode = Literal["artifact", "manifest_path", "manifest_provenance", "extra_file"]
 
@@ -159,7 +159,8 @@ def _evaluate_snapshot(case: DataEvalCase) -> DataEvalOutcome:
                 builder.build_daily_bars(provider, as_of=as_of)
             if case.repeat:
                 repeated = builder.build_daily_bars(provider, as_of=as_of)
-                if repeated.manifest.snapshot_id != result.manifest.snapshot_id or not repeated.reused:
+                same_snapshot = repeated.manifest.snapshot_id == result.manifest.snapshot_id
+                if not same_snapshot or not repeated.reused:
                     raise AssertionError("repeated snapshot was not deterministically reused")
             if case.variant_rows is not None:
                 variant = builder.build_daily_bars(_RowsProvider(case.variant_rows), as_of=as_of)
