@@ -1,0 +1,14 @@
+provider:
+  name: tushare
+  universe: CSI300
+  index_code: 000300.SH
+  lookback_days: 1400
+  token_env: TUSHARE_TOKEN
+
+quality:
+  minimum_universe_coverage: 0.95
+  require_fresh_daily_bar: true
+  require_adjust_factor: true
+  require_trading_calendar: true
+  execution_requires_instrument_status: true
+  execution_requires_limit_price: true

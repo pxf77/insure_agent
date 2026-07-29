@@ -10,7 +10,7 @@ runtime:
   require_manual_approval: true
 
 storage:
-  database_url: sqlite:///artifacts/quant_agent.db
+  database_url: sqlite:///artifacts/portfolio.db
   mlflow_tracking_uri: artifacts/mlruns
 
 paths:

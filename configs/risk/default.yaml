@@ -5,6 +5,10 @@ risk:
 
 limits:
   max_single_weight: 0.2
+  max_gross_exposure: 0.8
+  max_turnover: 0.8
+  max_order_value: 200000
+  max_drawdown: 0.15
 
 kill_switch:
   enabled: true

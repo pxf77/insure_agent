@@ -1,12 +1,19 @@
-# Live Trading Checklist
+# 交易连接准入清单
 
-Live trading is not implemented in the local MVP.
+当前项目只支持本地 paper，真实订单提交未实现。以下全部满足前，不得增加
+券商写权限或无人值守执行：
 
-Before any future live-trading mode is enabled, require:
+- [ ] paper 连续运行至少 60 个交易日。
+- [ ] 无重复订单、无法解释的账本差异或数据静默缺失。
+- [ ] 数据版本、配置、代码、决策、审批、订单、成交和 NAV 可完整追溯。
+- [ ] 审批过期、计划变更、损坏产物和混合 `run_id` 均被阻断。
+- [ ] 风控后开启 Kill Switch 仍能在提交前阻断。
+- [ ] 已演练账户、持仓、现金、费用和成交的日终对账。
+- [ ] 只读账户接入经过单独安全评审。
+- [ ] `live_shadow` 连续稳定，并每日解释模拟与真实账户差异。
+- [ ] `live_manual` 作为独立 OpenSpec 变更提出并审批。
+- [ ] 实盘仍默认关闭，人工审批、审计和 Kill Switch 不可绕过。
 
-- Explicit `ENABLE_LIVE_TRADING=true`.
-- Enabled risk profile for live mode.
-- Manual approval or a documented approval waiver.
-- Kill switch validation.
-- Broker gateway dry-run and reconciliation checks.
-- Audit logs for all generated orders and trades.
+第一轮演进明确不接受：无人值守实盘、LLM 修改生产策略/风控、LLM 提交
+订单、分钟级交易、vn.py 写入网关、Redis、Kafka、gRPC、PostgreSQL 或
+微服务拆分。

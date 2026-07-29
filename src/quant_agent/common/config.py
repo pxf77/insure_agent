@@ -21,7 +21,7 @@ class RuntimeSettings(BaseModel):
 
 
 class StorageSettings(BaseModel):
-    database_url: str = "sqlite:///artifacts/quant_agent.db"
+    database_url: str = "sqlite:///artifacts/portfolio.db"
     mlflow_tracking_uri: str = "artifacts/mlruns"
 
 

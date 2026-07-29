@@ -1,0 +1,9 @@
+provider:
+  name: sample
+  universe: CSI300
+  deterministic: true
+
+quality:
+  minimum_universe_coverage: 0.95
+  require_fresh_daily_bar: true
+  require_trading_calendar: true
