@@ -137,6 +137,8 @@ Official Eastmoney Choice and Tonghuashun iFinD daily-bar adapters are available
 immutable point-in-time snapshots. They load credentials only from the official Choice SDK
 activation or the `IFIND_ACCESS_TOKEN` process environment. See
 [`docs/vendor_integrations.md`](docs/vendor_integrations.md) for setup and safety details.
+Stable Ubuntu Choice hosts should also follow
+[`docs/choice_ubuntu_deployment.md`](docs/choice_ubuntu_deployment.md).
 
 Read-only broker snapshots can be imported in `live_shadow` mode:
 

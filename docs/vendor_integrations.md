@@ -37,6 +37,9 @@ Official references:
 - <https://quantapi.eastmoney.com/Exp/Search?from=web>
 - <https://quantapi.eastmoney.com/Upload/EMQuantAPI_Python.html>
 
+For a pinned, non-secret Ubuntu installation and activation procedure, see
+[`choice_ubuntu_deployment.md`](choice_ubuntu_deployment.md).
+
 ## Tonghuashun iFinD
 
 Set the official HTTP access token only in the process environment:
