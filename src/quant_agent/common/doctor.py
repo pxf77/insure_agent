@@ -127,6 +127,27 @@ def _check_live_safety(config: AppConfig, _profile: DoctorProfile) -> DoctorChec
     )
 
 
+def _check_live_shadow_safety(config: AppConfig) -> DoctorCheck:
+    if not config.runtime.allow_live_shadow:
+        return DoctorCheck(
+            check_id="live_shadow_safety",
+            status=CheckStatus.PASS,
+            message="Live shadow is disabled.",
+        )
+    if config.runtime.allow_live_trading:
+        return DoctorCheck(
+            check_id="live_shadow_safety",
+            status=CheckStatus.FAIL,
+            message="Live shadow must not be combined with live trading.",
+            remediation="Set runtime.allow_live_trading=false.",
+        )
+    return DoctorCheck(
+        check_id="live_shadow_safety",
+        status=CheckStatus.PASS,
+        message="Read-only live shadow is enabled while live trading remains disabled.",
+    )
+
+
 def _check_artifact_writable(config: AppConfig, project_root: Path) -> DoctorCheck:
     paths = ProjectPaths.from_config(config, project_root=project_root)
     probe = paths.artifact_dir / ".doctor-write-probe"
@@ -229,6 +250,7 @@ def run_doctor(
             ),
             _check_timezone(config),
             _check_live_safety(config, profile),
+            _check_live_shadow_safety(config),
             _check_artifact_writable(config, Path(project_root)),
             _check_executable("uv"),
             _check_executable("docker"),

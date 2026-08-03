@@ -12,6 +12,15 @@ def test_status_command_reports_dev_environment():
     assert result.exit_code == 0
     assert "env: dev" in result.stdout
     assert "live_trading: disabled" in result.stdout
+    assert "live_shadow: disabled" in result.stdout
+
+
+def test_data_providers_command_lists_official_integrations():
+    result = runner.invoke(app, ["data", "providers"])
+
+    assert result.exit_code == 0
+    assert "choice: official EmQuantAPI" in result.stdout
+    assert "ifind: official HTTP API" in result.stdout
 
 
 def test_init_creates_artifact_directories(tmp_path):

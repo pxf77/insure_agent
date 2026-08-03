@@ -40,6 +40,7 @@ def test_mvp_doctor_has_no_failures(tmp_path: Path) -> None:
     assert _status(report, "config") == CheckStatus.PASS
     assert _status(report, "artifact_writable") == CheckStatus.PASS
     assert _status(report, "live_trading_safety") == CheckStatus.PASS
+    assert _status(report, "live_shadow_safety") == CheckStatus.PASS
     assert any(check.check_id == "module_qlib" for check in report.checks)
     assert any(check.check_id == "module_vnpy" for check in report.checks)
 
@@ -56,6 +57,22 @@ def test_dev_live_trading_is_rejected(tmp_path: Path) -> None:
     assert report.has_failures
     assert report.overall_status == CheckStatus.FAIL
     assert _status(report, "live_trading_safety") == CheckStatus.FAIL
+    assert _status(report, "live_shadow_safety") == CheckStatus.PASS
+
+
+def test_live_shadow_is_read_only_and_allowed(tmp_path: Path) -> None:
+    report = run_doctor(
+        config_path=Path("configs/env/live_shadow.yaml"),
+        project_root=tmp_path,
+        profile=DoctorProfile.EXECUTION,
+    )
+
+    assert _status(report, "live_trading_safety") == CheckStatus.PASS
+    assert _status(report, "live_shadow_safety") == CheckStatus.PASS
+    shadow_check = next(
+        check for check in report.checks if check.check_id == "live_shadow_safety"
+    )
+    assert "Read-only live shadow is enabled" in shadow_check.message
 
 
 def test_nominal_live_configuration_is_rejected_until_m9(tmp_path: Path) -> None:
@@ -128,6 +145,7 @@ def test_doctor_cli_emits_json(tmp_path: Path) -> None:
     assert payload["has_failures"] is False
     assert payload["overall_status"] in {"PASS", "WARN"}
     assert any(item["check_id"] == "live_trading_safety" for item in payload["checks"])
+    assert any(item["check_id"] == "live_shadow_safety" for item in payload["checks"])
 
 
 def test_doctor_cli_rejects_invalid_profile(tmp_path: Path) -> None:

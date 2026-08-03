@@ -12,8 +12,17 @@ def test_load_dev_config_from_yaml():
     assert config.app.env == "dev"
     assert config.app.artifact_dir == Path("artifacts")
     assert config.runtime.allow_live_trading is False
+    assert config.runtime.allow_live_shadow is False
     assert config.runtime.require_manual_approval is True
     assert config.paths.raw_data == Path("artifacts/data/raw")
+
+
+def test_live_shadow_config_is_read_only() -> None:
+    config = load_app_config(Path("configs/env/live_shadow.yaml"))
+
+    assert config.app.env == "live_shadow"
+    assert config.runtime.allow_live_shadow is True
+    assert config.runtime.allow_live_trading is False
 
 
 def test_project_paths_create_expected_artifact_directories(tmp_path):

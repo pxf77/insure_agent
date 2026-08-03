@@ -1,5 +1,5 @@
 app:
-  env: dev
+  env: live_shadow
   timezone: Asia/Shanghai
   artifact_dir: artifacts
   log_level: INFO
@@ -7,7 +7,7 @@ app:
 runtime:
   communication_mode: file
   allow_live_trading: false
-  allow_live_shadow: false
+  allow_live_shadow: true
   require_manual_approval: true
 
 storage:

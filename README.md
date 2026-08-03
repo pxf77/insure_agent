@@ -127,6 +127,27 @@ Run the full local paper-mode MVP:
 uv run --python 3.13 --extra dev quant-agent run pipeline --mode paper
 ```
 
+List supported market-data providers:
+
+```bash
+uv run --python 3.13 --extra dev quant-agent data providers
+```
+
+Official Eastmoney Choice and Tonghuashun iFinD daily-bar adapters are available for
+immutable point-in-time snapshots. They load credentials only from the official Choice SDK
+activation or the `IFIND_ACCESS_TOKEN` process environment. See
+[`docs/vendor_integrations.md`](docs/vendor_integrations.md) for setup and safety details.
+
+Read-only broker snapshots can be imported in `live_shadow` mode:
+
+```bash
+uv run --python 3.13 --extra dev quant-agent execution shadow \
+  --snapshot configs/execution/shadow_snapshot.example.json \
+  --config configs/env/live_shadow.yaml
+```
+
+This mode cannot submit or cancel orders and does not enable live trading.
+
 The command runs:
 
 ```text

@@ -1,0 +1,20 @@
+{
+  "schema_version": "1.0",
+  "provider_id": "official-broker-sidecar",
+  "as_of": "2026-05-22T07:30:00Z",
+  "account": {
+    "account_id": "shadow-account",
+    "cash": "500000",
+    "total_equity": "1000000"
+  },
+  "positions": [
+    {
+      "instrument": "600519.SH",
+      "quantity": 100,
+      "sellable_quantity": 0,
+      "market_value": "150000"
+    }
+  ],
+  "orders": [],
+  "trades": []
+}

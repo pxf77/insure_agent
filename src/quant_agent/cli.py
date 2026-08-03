@@ -12,14 +12,15 @@ from quant_agent.common.doctor import DoctorProfile, render_doctor_report, run_d
 from quant_agent.common.paths import ProjectPaths
 from quant_agent.common.run_index import RunIndex
 from quant_agent.data.providers.base import MarketDataProvider
-from quant_agent.data.providers.synthetic import SyntheticMarketDataProvider
-from quant_agent.data.providers.synthetic_research import SyntheticResearchMarketDataProvider
+from quant_agent.data.providers.registry import AVAILABLE_PROVIDERS, create_market_data_provider
 from quant_agent.data.qlib_converter import QlibConverter
 from quant_agent.data.snapshot import SnapshotBuilder
 from quant_agent.evals.contracts import render_contract_eval_report, run_contract_evals
 from quant_agent.evals.data import render_data_eval_report, run_data_evals
 from quant_agent.evals.research import render_research_eval_report, run_research_evals
+from quant_agent.execution.gateway import JsonFileReadOnlyGateway
 from quant_agent.execution.order_router import PaperTradingRunner
+from quant_agent.execution.shadow import LiveShadowRunner
 from quant_agent.research.qlib_runner import QlibRunner
 from quant_agent.research.report_writer import ReportWriter
 from quant_agent.research.snapshot_runner import SnapshotResearchRunner
@@ -32,6 +33,7 @@ data_app = typer.Typer(help="Data ingestion and conversion commands.")
 research_app = typer.Typer(help="Research commands.")
 risk_app = typer.Typer(help="Risk validation commands.")
 paper_app = typer.Typer(help="Paper trading commands.")
+execution_app = typer.Typer(help="Read-only broker gateway commands.")
 report_app = typer.Typer(help="Report commands.")
 run_app = typer.Typer(help="Pipeline commands.")
 contracts_app = typer.Typer(help="Versioned contract commands.")
@@ -40,6 +42,7 @@ app.add_typer(data_app, name="data")
 app.add_typer(research_app, name="research")
 app.add_typer(risk_app, name="risk")
 app.add_typer(paper_app, name="paper")
+app.add_typer(execution_app, name="execution")
 app.add_typer(report_app, name="report")
 app.add_typer(run_app, name="run")
 app.add_typer(contracts_app, name="contracts")
@@ -64,12 +67,22 @@ def _parse_datetime(value: str) -> datetime:
         raise typer.BadParameter(f"invalid ISO-8601 datetime: {value}") from exc
 
 
-def _market_data_provider(name: str) -> MarketDataProvider:
-    if name == "synthetic":
-        return SyntheticMarketDataProvider()
-    if name == "synthetic-research":
-        return SyntheticResearchMarketDataProvider()
-    raise typer.BadParameter("provider must be one of: synthetic, synthetic-research")
+def _market_data_provider(
+    name: str,
+    *,
+    symbols: tuple[str, ...] = (),
+    lookback_days: int = 365,
+    batch_size: int = 50,
+) -> MarketDataProvider:
+    try:
+        return create_market_data_provider(
+            name,
+            symbols=symbols,
+            lookback_days=lookback_days,
+            batch_size=batch_size,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
 
 
 @app.command()
@@ -77,10 +90,12 @@ def status(config: Path = Path("configs/env/dev.yaml")) -> None:
     """Show environment, data, risk, and execution status."""
     loaded = load_app_config(config)
     live_status = "enabled" if loaded.runtime.allow_live_trading else "disabled"
+    shadow_status = "enabled" if loaded.runtime.allow_live_shadow else "disabled"
     typer.echo(f"env: {loaded.app.env}")
     typer.echo(f"artifact_dir: {loaded.app.artifact_dir}")
     typer.echo(f"communication_mode: {loaded.runtime.communication_mode}")
     typer.echo(f"live_trading: {live_status}")
+    typer.echo(f"live_shadow: {shadow_status}")
 
 
 @app.command()
@@ -236,7 +251,21 @@ def data_snapshot(
     ),
     provider: str = typer.Option(
         "synthetic",
-        help="Provider: synthetic or synthetic-research.",
+        help=f"Provider: {', '.join(AVAILABLE_PROVIDERS)}.",
+    ),
+    symbols: str = typer.Option(
+        "",
+        help="Comma-separated A-share symbols; required for Choice and iFinD.",
+    ),
+    lookback_days: int = typer.Option(
+        365,
+        min=1,
+        help="Calendar-day history requested from vendor providers.",
+    ),
+    batch_size: int = typer.Option(
+        50,
+        min=1,
+        help="Maximum symbols per Choice or iFinD request.",
     ),
     config: Path = Path("configs/env/dev.yaml"),
     project_root: Path = Path("."),
@@ -246,7 +275,12 @@ def data_snapshot(
     result = SnapshotBuilder(
         snapshot_root=paths.artifact_dir / "data" / "snapshots"
     ).build_daily_bars(
-        _market_data_provider(provider),
+        _market_data_provider(
+            provider,
+            symbols=tuple(item.strip() for item in symbols.split(",") if item.strip()),
+            lookback_days=lookback_days,
+            batch_size=batch_size,
+        ),
         as_of=_parse_datetime(as_of),
     )
     action = "reused" if result.reused else "created"
@@ -254,6 +288,15 @@ def data_snapshot(
     typer.echo(f"visible_rows: {result.manifest.visible_rows}")
     typer.echo(f"snapshot_dir: {result.snapshot_dir}")
     typer.echo(f"manifest.json: {result.manifest_path}")
+
+
+@data_app.command("providers")
+def data_providers() -> None:
+    """List supported market-data providers and credential requirements."""
+    typer.echo("synthetic: built-in deterministic sample data")
+    typer.echo("synthetic-research: built-in deterministic research data")
+    typer.echo("choice: official EmQuantAPI SDK activation; no credentials stored")
+    typer.echo("ifind: official HTTP API; requires IFIND_ACCESS_TOKEN")
 
 
 @data_app.command("convert")
@@ -346,6 +389,31 @@ def paper_run(
     ).run(approved_path)
     typer.echo(f"orders.json: {orders_path}")
     typer.echo(f"trades.json: {trades_path}")
+
+
+@execution_app.command("shadow")
+def execution_shadow(
+    snapshot: Annotated[
+        Path,
+        typer.Option("--snapshot", help="Broker snapshot exported by an official sidecar."),
+    ],
+    config: Path = Path("configs/env/live_shadow.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Persist a validated read-only broker snapshot without submitting orders."""
+    loaded = load_app_config(config)
+    paths = ProjectPaths.from_config(loaded, project_root=project_root)
+    result = LiveShadowRunner(
+        artifact_root=paths.artifact_dir,
+        allow_live_shadow=loaded.runtime.allow_live_shadow,
+        allow_live_trading=loaded.runtime.allow_live_trading,
+    ).run(JsonFileReadOnlyGateway(snapshot))
+    action = "reused" if result.reused else "created"
+    typer.echo(f"live_shadow {action}: {result.shadow_run_id}")
+    typer.echo("can_submit_orders: false")
+    typer.echo(f"artifact_dir: {result.artifact_dir}")
+    typer.echo(f"broker_snapshot.json: {result.snapshot_path}")
+    typer.echo(f"manifest.json: {result.manifest_path}")
 
 
 @report_app.command("generate")

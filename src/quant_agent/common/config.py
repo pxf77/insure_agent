@@ -17,6 +17,7 @@ class AppSettings(BaseModel):
 class RuntimeSettings(BaseModel):
     communication_mode: str = "file"
     allow_live_trading: bool = False
+    allow_live_shadow: bool = False
     require_manual_approval: bool = True
 
 
