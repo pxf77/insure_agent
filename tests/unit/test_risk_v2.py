@@ -56,7 +56,7 @@ def policy_payload(**updates: object) -> dict[str, object]:
         "max_daily_loss": "0.05",
         "max_drawdown": "0.20",
         "allow_st": False,
-        "require_approval": True,
+        "require_approval": False,
     }
     payload.update(updates)
     return payload

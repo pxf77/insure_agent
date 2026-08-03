@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 import pandas as pd
 import typer
@@ -290,7 +290,10 @@ def research_qlib(
 
 @research_app.command("snapshot")
 def research_snapshot(
-    snapshot: Path = typer.Option(..., "--snapshot", help="Verified snapshot directory."),
+    snapshot: Annotated[
+        Path,
+        typer.Option("--snapshot", help="Verified snapshot directory."),
+    ],
     config: Path = Path("configs/research/snapshot_baseline.yaml"),
     env_config: Path = Path("configs/env/dev.yaml"),
     project_root: Path = Path("."),

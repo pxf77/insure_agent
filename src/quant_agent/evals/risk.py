@@ -1,18 +1,18 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Any, Literal
-from uuid import UUID
+from typing import Any, Literal, cast
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from quant_agent.risk.approval_store import ApprovalStore
 from quant_agent.risk.kill_switch_store import KillSwitchStore
 from quant_agent.risk.v2_engine import DeterministicRiskEngine
 from quant_agent.risk.v2_models import (
+    ApprovalEvidence,
     KillSwitchScope,
     RiskContext,
     RiskPolicy,
@@ -33,6 +33,9 @@ RiskEvalAction = Literal[
     "stale_data",
     "future_snapshot",
     "missing_approval",
+    "approval_scope_mismatch",
+    "approval_expired",
+    "approval_future",
     "daily_loss",
     "drawdown",
     "hard_kill_switch",
@@ -40,6 +43,7 @@ RiskEvalAction = Literal[
     "missing_instrument_context",
     "duplicate_context",
     "strategy_mismatch",
+    "infeasible_total_floor",
 ]
 
 
@@ -103,6 +107,20 @@ def _base_target() -> dict[str, Any]:
     }
 
 
+def _approval() -> dict[str, Any]:
+    return {
+        "approval_id": "11111111-1111-4111-8111-111111111111",
+        "status": "APPROVED",
+        "account_id": "paper-account",
+        "strategy_id": "strategy-risk-eval",
+        "target_run_id": "research-risk-eval",
+        "policy_version": "risk-eval-v1",
+        "approved_at": "2026-05-22T23:00:00Z",
+        "expires_at": "2026-05-23T01:00:00Z",
+        "approvers": ["risk-officer"],
+    }
+
+
 def _base_context() -> dict[str, Any]:
     return {
         "account_id": "paper-account",
@@ -113,7 +131,7 @@ def _base_context() -> dict[str, Any]:
         "cash": "550000",
         "daily_loss": "0.01",
         "drawdown": "0.05",
-        "approval_id": "11111111-1111-4111-8111-111111111111",
+        "approval": _approval(),
         "current_positions": [
             {
                 "instrument": "600519.SH",
@@ -173,21 +191,21 @@ def _base_policy() -> dict[str, Any]:
 
 
 def _position(target: dict[str, Any], instrument: str) -> dict[str, Any]:
-    for item in target["positions"]:
+    for item in cast(list[dict[str, Any]], target["positions"]):
         if item["instrument"] == instrument:
             return item
     raise KeyError(instrument)
 
 
 def _instrument(context: dict[str, Any], instrument: str) -> dict[str, Any]:
-    for item in context["instruments"]:
+    for item in cast(list[dict[str, Any]], context["instruments"]):
         if item["instrument"] == instrument:
             return item
     raise KeyError(instrument)
 
 
 def _current_position(context: dict[str, Any], instrument: str) -> dict[str, Any]:
-    for item in context["current_positions"]:
+    for item in cast(list[dict[str, Any]], context["current_positions"]):
         if item["instrument"] == instrument:
             return item
     raise KeyError(instrument)
@@ -205,9 +223,13 @@ def _prepare_case(
     if action == "single_weight":
         _position(target, "600519.SH")["target_weight"] = "0.30"
     elif action == "total_weight":
-        policy["max_total_weight"] = "0.40"
-        policy["minimum_cash_weight"] = "0.20"
+        policy["max_total_weight"] = "0.36"
+        for item in cast(list[dict[str, Any]], context["current_positions"]):
+            item["sellable_weight"] = item["current_weight"]
     elif action == "industry_weight":
+        policy["max_industry_weight"] = "0.28"
+        for item in cast(list[dict[str, Any]], context["current_positions"]):
+            item["sellable_weight"] = item["current_weight"]
         target["positions"].append(
             {
                 "instrument": "000858.SZ",
@@ -230,6 +252,7 @@ def _prepare_case(
         current = _current_position(context, "600519.SH")
         current["current_weight"] = "0.20"
         current["sellable_weight"] = "0.05"
+        context["cash"] = "500000"
         _position(target, "600519.SH")["target_weight"] = "0.05"
     elif action == "suspended":
         _instrument(context, "600519.SH")["suspended"] = True
@@ -245,7 +268,17 @@ def _prepare_case(
     elif action == "future_snapshot":
         context["snapshot_as_of"] = "2026-05-23T00:01:00Z"
     elif action == "missing_approval":
-        context["approval_id"] = None
+        context["approval"] = None
+    elif action == "approval_scope_mismatch":
+        _approval_payload = cast(dict[str, Any], context["approval"])
+        _approval_payload["target_run_id"] = "forged-run"
+    elif action == "approval_expired":
+        _approval_payload = cast(dict[str, Any], context["approval"])
+        _approval_payload["expires_at"] = "2026-05-22T23:59:00Z"
+    elif action == "approval_future":
+        _approval_payload = cast(dict[str, Any], context["approval"])
+        _approval_payload["approved_at"] = "2026-05-23T00:01:00Z"
+        _approval_payload["expires_at"] = "2026-05-23T01:00:00Z"
     elif action == "daily_loss":
         context["daily_loss"] = "0.05"
     elif action == "drawdown":
@@ -279,6 +312,14 @@ def _prepare_case(
         context["instruments"].append(dict(context["instruments"][0]))
     elif action == "strategy_mismatch":
         context["strategy_id"] = "different-strategy"
+    elif action == "infeasible_total_floor":
+        policy["max_total_weight"] = "0.40"
+        context["cash"] = "400000"
+        for item in cast(list[dict[str, Any]], context["current_positions"]):
+            item["current_weight"] = "0.20"
+            item["sellable_weight"] = "0.00"
+        for item in cast(list[dict[str, Any]], target["positions"]):
+            item["target_weight"] = "0.20"
     return target, context, policy
 
 
@@ -286,14 +327,27 @@ def _evaluate_case(case: RiskEvalCase) -> RiskEvalOutcome:
     try:
         with tempfile.TemporaryDirectory(prefix="quant-agent-risk-eval-") as temporary:
             store = KillSwitchStore(Path(temporary) / "kill_switches.json")
+            approval_store = ApprovalStore(Path(temporary) / "approvals.json")
             target_payload, context_payload, policy_payload = _prepare_case(case, store)
+            trusted_payload = _approval()
+            if case.action in {"approval_expired", "approval_future"}:
+                trusted_payload = cast(dict[str, Any], context_payload["approval"])
+            approval_store.issue(ApprovalEvidence.model_validate(trusted_payload))
             target = TargetPortfolio.model_validate(target_payload)
             context = RiskContext.model_validate(context_payload)
             policy = RiskPolicy.model_validate(policy_payload)
+            switch_state = store.read()
+            approval_state = approval_store.read()
             decision = DeterministicRiskEngine(
                 policy=policy,
                 kill_switch_store=store,
-            ).evaluate(target, context)
+                approval_store=approval_store,
+            ).evaluate(
+                target,
+                context,
+                kill_switch_state=switch_state,
+                approval_state=approval_state,
+            )
     except (ValidationError, ValueError) as exc:
         if case.expected_error and case.expected_error.lower() in str(exc).lower():
             return RiskEvalOutcome(case_id=case.id, passed=True, action=case.action)

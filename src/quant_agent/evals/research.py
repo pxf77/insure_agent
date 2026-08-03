@@ -11,7 +11,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from quant_agent.data.providers.synthetic_research import SyntheticResearchMarketDataProvider
 from quant_agent.data.snapshot import SnapshotBuilder
-from quant_agent.research.snapshot_runner import SnapshotResearchRunner, build_lagged_features
+from quant_agent.research.snapshot_runner import (
+    SnapshotResearchResult,
+    SnapshotResearchRunner,
+    build_lagged_features,
+)
 
 
 class ResearchEvalCase(BaseModel):
@@ -79,7 +83,11 @@ def _write_cost_config(base_config: Path, destination: Path, total_bps: float) -
     destination.write_text(yaml.safe_dump(payload, sort_keys=True), encoding="utf-8")
 
 
-def _run(root: Path, config_path: Path, snapshot_dir: Path):
+def _run(
+    root: Path,
+    config_path: Path,
+    snapshot_dir: Path,
+) -> SnapshotResearchResult:
     return SnapshotResearchRunner(
         snapshot_dir=snapshot_dir,
         config_path=config_path,
@@ -165,7 +173,11 @@ def _evaluate_case(case: ResearchEvalCase, base_config: Path) -> ResearchEvalOut
                     and len(ranks) == len(set(ranks))
                     and total <= 1.0
                 )
-                details = None if passed else f"instruments={instruments}, ranks={ranks}, total={total}"
+                details = (
+                    None
+                    if passed
+                    else f"instruments={instruments}, ranks={ranks}, total={total}"
+                )
             elif case.action == "snapshot_tamper":
                 normalized = snapshot_dir / "normalized" / "daily_bar.csv"
                 normalized.write_text("tampered\n", encoding="utf-8")

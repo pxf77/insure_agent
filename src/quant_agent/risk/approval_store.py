@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -119,7 +119,9 @@ class ApprovalStore:
                 )
             except FileExistsError:
                 if time.monotonic() >= deadline:
-                    raise TimeoutError("timed out waiting for approval state lock")
+                    raise TimeoutError(
+                        "timed out waiting for approval state lock"
+                    ) from None
                 time.sleep(0.02)
         try:
             os.write(descriptor, str(os.getpid()).encode("ascii"))

@@ -14,9 +14,10 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pandas as pd
 import yaml
 
-from quant_agent.data.snapshot import DataSnapshotManifest, SnapshotBuilder
+from quant_agent.data.snapshot import SnapshotBuilder
 from quant_agent.schemas.v2 import (
     DateRange,
+    InstrumentId,
     ResearchSpec,
     TargetPortfolio,
     TargetPositionV2,
@@ -404,7 +405,7 @@ class SnapshotResearchRunner:
         for rank, row in enumerate(final_ranked.itertuples(index=False), start=1):
             target_positions.append(
                 TargetPositionV2(
-                    instrument=str(row.symbol),
+                    instrument=InstrumentId.model_validate(str(row.symbol)),
                     target_weight=_decimal(last_weights[str(row.symbol)]),
                     score=_decimal(float(row.score), places=12),
                     rank=rank,

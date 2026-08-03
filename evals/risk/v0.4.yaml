@@ -16,6 +16,27 @@ cases:
     tags: [risk, concentration]
     severity: critical
 
+  - id: risk-total-position-adjusted
+    action: total_weight
+    expected_decision: ADJUST
+    expected_reason_codes: [MAX_TOTAL_WEIGHT]
+    expected_weights:
+      600519.SH: "0.12"
+      000001.SZ: "0.12"
+      300750.SZ: "0.12"
+    tags: [risk, total-weight]
+    severity: critical
+
+  - id: risk-industry-position-adjusted
+    action: industry_weight
+    expected_decision: ADJUST
+    expected_reason_codes: [MAX_INDUSTRY_WEIGHT]
+    expected_weights:
+      600519.SH: "0.12"
+      000858.SZ: "0.16"
+    tags: [risk, industry]
+    severity: critical
+
   - id: risk-liquidity-adjusted
     action: liquidity
     expected_decision: ADJUST
@@ -91,6 +112,27 @@ cases:
     tags: [risk, approval]
     severity: critical
 
+  - id: risk-approval-scope-mismatch-rejected
+    action: approval_scope_mismatch
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_SCOPE_MISMATCH]
+    tags: [risk, approval, adversarial]
+    severity: critical
+
+  - id: risk-expired-approval-rejected
+    action: approval_expired
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_EXPIRED]
+    tags: [risk, approval, expiration]
+    severity: critical
+
+  - id: risk-future-approval-rejected
+    action: approval_future
+    expected_decision: REJECT
+    expected_reason_codes: [APPROVAL_FROM_FUTURE]
+    tags: [risk, approval, adversarial]
+    severity: critical
+
   - id: risk-daily-loss-rejected
     action: daily_loss
     expected_decision: REJECT
@@ -139,4 +181,11 @@ cases:
     expected_decision: REJECT
     expected_reason_codes: [STRATEGY_CONTEXT_MISMATCH]
     tags: [risk, context]
+    severity: critical
+
+  - id: risk-infeasible-total-floor-rejected
+    action: infeasible_total_floor
+    expected_decision: REJECT
+    expected_reason_codes: [INFEASIBLE_MAX_TOTAL_WEIGHT]
+    tags: [risk, floor, adversarial]
     severity: critical

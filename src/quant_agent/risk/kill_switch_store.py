@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -17,29 +20,39 @@ class KillSwitchState(BaseModel):
     schema_version: str = "1.0"
     records: list[KillSwitchRecord] = Field(default_factory=list)
 
+    def active_for(
+        self,
+        *,
+        account_id: str,
+        strategy_id: str,
+    ) -> list[KillSwitchRecord]:
+        records: list[KillSwitchRecord] = []
+        for record in self.records:
+            if not record.active:
+                continue
+            if record.scope == KillSwitchScope.GLOBAL:
+                records.append(record)
+            elif record.scope == KillSwitchScope.ACCOUNT and record.scope_id == account_id:
+                records.append(record)
+            elif record.scope == KillSwitchScope.STRATEGY and record.scope_id == strategy_id:
+                records.append(record)
+        return sorted(records, key=lambda item: item.switch_id)
+
 
 class KillSwitchStore:
-    """Atomic local persistence for global, account, and strategy kill switches."""
+    """Atomic, serialized persistence for scoped kill switches."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, lock_timeout_seconds: float = 5.0):
         self.path = Path(path)
+        self.lock_path = self.path.with_name(f"{self.path.name}.lock")
+        self.lock_timeout_seconds = lock_timeout_seconds
 
     def read(self) -> KillSwitchState:
-        if not self.path.exists():
-            return KillSwitchState()
-        if self.path.is_symlink() or not self.path.is_file():
-            raise ValueError("kill-switch state path is unsafe")
-        return KillSwitchState.model_validate_json(self.path.read_text(encoding="utf-8"))
+        return self._read_unlocked()
 
     def write(self, state: KillSwitchState) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
-        temporary.write_text(
-            json.dumps(state.model_dump(mode="json"), ensure_ascii=False, indent=2, sort_keys=True)
-            + "\n",
-            encoding="utf-8",
-        )
-        os.replace(temporary, self.path)
+        with self._locked():
+            self._write_unlocked(state)
 
     def set(
         self,
@@ -66,25 +79,75 @@ class KillSwitchStore:
             changed_at=timestamp,
             changed_by=changed_by,
         )
-        state = self.read()
-        records = [item for item in state.records if item.switch_id != switch_id]
-        records.append(record)
-        records.sort(key=lambda item: item.switch_id)
-        self.write(KillSwitchState(records=records))
+        with self._locked():
+            state = self._read_unlocked()
+            existing = next(
+                (item for item in state.records if item.switch_id == switch_id),
+                None,
+            )
+            if existing is not None and record.changed_at <= existing.changed_at:
+                raise ValueError("kill-switch update is stale or non-monotonic")
+            records = [item for item in state.records if item.switch_id != switch_id]
+            records.append(record)
+            records.sort(key=lambda item: item.switch_id)
+            self._write_unlocked(KillSwitchState(records=records))
         return record
 
     def active_for(self, *, account_id: str, strategy_id: str) -> list[KillSwitchRecord]:
-        records = []
-        for record in self.read().records:
-            if not record.active:
-                continue
-            if record.scope == KillSwitchScope.GLOBAL:
-                records.append(record)
-            elif record.scope == KillSwitchScope.ACCOUNT and record.scope_id == account_id:
-                records.append(record)
-            elif record.scope == KillSwitchScope.STRATEGY and record.scope_id == strategy_id:
-                records.append(record)
-        return sorted(records, key=lambda item: item.switch_id)
+        return self.read().active_for(account_id=account_id, strategy_id=strategy_id)
+
+    def _read_unlocked(self) -> KillSwitchState:
+        if not self.path.exists():
+            return KillSwitchState()
+        if self.path.is_symlink() or not self.path.is_file():
+            raise ValueError("kill-switch state path is unsafe")
+        return KillSwitchState.model_validate_json(self.path.read_text(encoding="utf-8"))
+
+    def _write_unlocked(self, state: KillSwitchState) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists() and self.path.is_symlink():
+            raise ValueError("kill-switch state path is unsafe")
+        temporary = self.path.with_name(f".{self.path.name}.{uuid4().hex}.tmp")
+        temporary.write_text(
+            json.dumps(
+                state.model_dump(mode="json"),
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        os.chmod(temporary, 0o600)
+        os.replace(temporary, self.path)
+
+    @contextmanager
+    def _locked(self) -> Iterator[None]:
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + self.lock_timeout_seconds
+        descriptor: int | None = None
+        while descriptor is None:
+            try:
+                descriptor = os.open(
+                    self.lock_path,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                    0o600,
+                )
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError(
+                        "timed out waiting for kill-switch state lock"
+                    ) from None
+                time.sleep(0.02)
+        try:
+            os.write(descriptor, str(os.getpid()).encode("ascii"))
+            yield
+        finally:
+            os.close(descriptor)
+            try:
+                self.lock_path.unlink()
+            except FileNotFoundError:
+                pass
 
     @staticmethod
     def _switch_id(scope: KillSwitchScope, scope_id: str | None) -> str:

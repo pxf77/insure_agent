@@ -98,7 +98,9 @@ def test_snapshot_research_creates_auditable_reproducible_artifacts(tmp_path: Pa
     assert sum(float(item["target_weight"]) for item in target["positions"]) <= 1.0
 
     predictions = pd.read_csv(first.predictions_path)
-    assert (pd.to_datetime(predictions["feature_as_of"]) < pd.to_datetime(predictions["trade_date"])).all()
+    feature_dates = pd.to_datetime(predictions["feature_max_trade_date"])
+    trade_dates = pd.to_datetime(predictions["trade_date"])
+    assert (feature_dates < trade_dates).all()
 
 
 def test_snapshot_research_cli_runs_from_verified_snapshot(tmp_path: Path) -> None:

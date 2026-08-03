@@ -5,10 +5,12 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import ROUND_DOWN, Decimal
 
-from quant_agent.risk.kill_switch_store import KillSwitchStore
+from quant_agent.risk.approval_store import ApprovalState, ApprovalStore
+from quant_agent.risk.kill_switch_store import KillSwitchState, KillSwitchStore
 from quant_agent.risk.v2_models import InstrumentRiskState, RiskContext, RiskPolicy
 from quant_agent.schemas.v2 import (
     ApprovedTarget,
+    InstrumentId,
     RiskDecisionType,
     RiskDecisionV2,
     RiskRuleResult,
@@ -45,11 +47,25 @@ def _weight(value: Decimal) -> Decimal:
 class DeterministicRiskEngine:
     """Ordered fail-closed risk evaluation for complete v2 target portfolios."""
 
-    def __init__(self, *, policy: RiskPolicy, kill_switch_store: KillSwitchStore):
+    def __init__(
+        self,
+        *,
+        policy: RiskPolicy,
+        kill_switch_store: KillSwitchStore,
+        approval_store: ApprovalStore | None = None,
+    ):
         self.policy = policy
         self.kill_switch_store = kill_switch_store
+        self.approval_store = approval_store
 
-    def evaluate(self, target: TargetPortfolio, context: RiskContext) -> RiskDecisionV2:
+    def evaluate(
+        self,
+        target: TargetPortfolio,
+        context: RiskContext,
+        *,
+        kill_switch_state: KillSwitchState | None = None,
+        approval_state: ApprovalState | None = None,
+    ) -> RiskDecisionV2:
         results: list[RiskRuleResult] = []
         if target.strategy_id != context.strategy_id:
             return self._reject(
@@ -136,7 +152,8 @@ class DeterministicRiskEngine:
             )
         )
 
-        switches = self.kill_switch_store.active_for(
+        switch_state = kill_switch_state or self.kill_switch_store.read()
+        switches = switch_state.active_for(
             account_id=context.account_id,
             strategy_id=context.strategy_id,
         )
@@ -199,21 +216,26 @@ class DeterministicRiskEngine:
             )
         )
 
-        if self.policy.require_approval and context.approval_id is None:
+        approval_rejection = self._validate_approval(
+            target,
+            context,
+            approval_state=approval_state,
+        )
+        if approval_rejection is not None:
             return self._reject(
                 target,
                 context,
                 results,
                 rule_id="APPROVAL",
-                reason_code="APPROVAL_REQUIRED",
-                message="risk policy requires a valid approval reference",
+                reason_code=approval_rejection[0],
+                message=approval_rejection[1],
             )
         results.append(
             self._result(
                 rule_id="APPROVAL",
                 outcome=RuleOutcome.PASS,
                 reason_code="APPROVAL_OK",
-                message="approval requirement is satisfied",
+                message="approval evidence is valid and bound to this decision",
             )
         )
 
@@ -372,7 +394,7 @@ class DeterministicRiskEngine:
             )
         positions = [
             ApprovedTarget(
-                instrument=instrument,
+                instrument=InstrumentId.model_validate(instrument),
                 target_weight=_weight(weights[instrument]),
                 adjusted=weights[instrument] != original[instrument],
                 reason_code=reasons.get(instrument),
@@ -389,6 +411,58 @@ class DeterministicRiskEngine:
             positions=positions,
             rule_results=results,
         )
+
+    def _validate_approval(
+        self,
+        target: TargetPortfolio,
+        context: RiskContext,
+        *,
+        approval_state: ApprovalState | None,
+    ) -> tuple[str, str] | None:
+        if not self.policy.require_approval:
+            return None
+        approval = context.approval
+        if approval is None:
+            return "APPROVAL_REQUIRED", "risk policy requires approval evidence"
+        expected = {
+            "account_id": context.account_id,
+            "strategy_id": context.strategy_id,
+            "target_run_id": target.run_id,
+            "policy_version": self.policy.policy_version,
+        }
+        actual = {
+            "account_id": approval.account_id,
+            "strategy_id": approval.strategy_id,
+            "target_run_id": approval.target_run_id,
+            "policy_version": approval.policy_version,
+        }
+        if actual != expected:
+            return (
+                "APPROVAL_SCOPE_MISMATCH",
+                "approval evidence is not bound to this decision",
+            )
+        trusted_state = approval_state
+        if trusted_state is None:
+            if self.approval_store is None:
+                return (
+                    "APPROVAL_NOT_TRUSTED",
+                    "trusted approval registry is unavailable",
+                )
+            trusted_state = self.approval_store.read()
+        trusted = trusted_state.trusted(approval.approval_id)
+        if trusted is None or trusted != approval:
+            return (
+                "APPROVAL_NOT_TRUSTED",
+                "approval evidence is not present in the trusted registry",
+            )
+        if approval.approved_at > context.evaluated_at:
+            return (
+                "APPROVAL_FROM_FUTURE",
+                "approval timestamp is later than evaluation time",
+            )
+        if context.evaluated_at >= approval.expires_at:
+            return "APPROVAL_EXPIRED", "approval evidence has expired"
+        return None
 
     def _apply_industry_limits(
         self,
@@ -488,7 +562,7 @@ class DeterministicRiskEngine:
                 outcome=RuleOutcome.ADJUST,
                 reason_code=bound.reason_code,
                 message=bound.message,
-                instrument=instrument,
+                instrument=InstrumentId.model_validate(instrument),
                 original_value=str(previous),
                 threshold=str(threshold),
                 adjusted_value=str(normalized),
