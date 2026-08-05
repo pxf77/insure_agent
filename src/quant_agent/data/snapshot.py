@@ -12,7 +12,7 @@ from uuid import uuid4
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from quant_agent.data.providers.base import MarketDataProvider
+from quant_agent.data.providers.base import PointInTimeMarketDataProvider
 from quant_agent.data.quality import (
     DAILY_BAR_SNAPSHOT_COLUMNS,
     DataQualityIssue,
@@ -186,7 +186,7 @@ class SnapshotBuilder:
 
     def build_daily_bars(
         self,
-        provider: MarketDataProvider,
+        provider: PointInTimeMarketDataProvider,
         *,
         as_of: datetime,
     ) -> SnapshotBuildResult:

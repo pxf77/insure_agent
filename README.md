@@ -8,6 +8,20 @@ current codebase provides a local MVP: deterministic sample data generation,
 Qlib-style conversion, research target generation, risk validation, mock paper
 execution, Markdown reporting, and a `latest.json` artifact index.
 
+The trustworthy daily workflow adds immutable canonical data snapshots,
+reproducible research, deterministic pre-trade risk checks, checksum-bound
+manual approval, and auditable paper execution:
+
+```bash
+quant-agent run daily --trade-date 2026-07-29 --provider sample
+quant-agent approval grant --run-id <run_id> --approver <name>
+quant-agent paper run --run-id <run_id>
+quant-agent run show --run-id <run_id>
+```
+
+See [the migration guide](docs/migration_trustworthy_daily.md) and
+[the runbook](docs/runbook.md) for configuration, recovery, and audit details.
+
 The phased delivery plan is maintained in
 [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md). Repository
 integration decisions are recorded under [`docs/adr`](docs/adr).

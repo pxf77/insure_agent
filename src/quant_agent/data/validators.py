@@ -24,6 +24,10 @@ def validate_daily_bar(frame: pd.DataFrame) -> None:
 
     bad_price = frame[
         (frame["high"] < frame["low"])
+        | (frame["high"] < frame["open"])
+        | (frame["high"] < frame["close"])
+        | (frame["low"] > frame["open"])
+        | (frame["low"] > frame["close"])
         | (frame["open"] <= 0)
         | (frame["high"] <= 0)
         | (frame["low"] <= 0)

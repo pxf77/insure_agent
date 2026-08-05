@@ -1,7 +1,13 @@
 strategies:
+  daily_momentum_csi300_v1:
+    owner: local
+    type: deterministic_momentum
+    config: configs/research/daily_momentum.yaml
+    risk_profile: default
+    status: active
   lgb_alpha158_csi300_v1:
     owner: quant
     type: qlib
-    config: configs/research/baseline_lgb_alpha158.yaml
+    config: configs/research/qlib_alpha158_csi300.yaml
     risk_profile: default
-    status: active
+    status: candidate

@@ -1,0 +1,11 @@
+provider:
+  name: akshare
+  universe: CSI300
+  lookback_days: 400
+
+quality:
+  minimum_universe_coverage: 0.95
+  require_fresh_daily_bar: true
+  require_trading_calendar: true
+  execution_requires_instrument_status: true
+  execution_requires_limit_price: true

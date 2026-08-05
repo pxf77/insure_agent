@@ -47,6 +47,10 @@ if [[ ! -x $python_bin ]]; then
   echo "python executable is unavailable: $python_bin" >&2
   exit 2
 fi
+if [[ -e $destination ]]; then
+  echo "destination already exists; refusing to overwrite: $destination" >&2
+  exit 2
+fi
 if [[ $(uname -s) != "Linux" ]]; then
   echo "this installer supports Linux hosts only" >&2
   exit 2
@@ -55,11 +59,6 @@ if ! "$python_bin" -c 'import sys; raise SystemExit(not ((3, 10) <= sys.version_
   echo "python must satisfy >=3.10,<3.14" >&2
   exit 2
 fi
-if [[ -e $destination ]]; then
-  echo "destination already exists; refusing to overwrite: $destination" >&2
-  exit 2
-fi
-
 for executable in sha256sum unzip; do
   if ! command -v "$executable" >/dev/null 2>&1; then
     echo "required executable is unavailable: $executable" >&2

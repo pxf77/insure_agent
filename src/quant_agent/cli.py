@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -11,10 +11,12 @@ from quant_agent.common.config import load_app_config
 from quant_agent.common.doctor import DoctorProfile, render_doctor_report, run_doctor
 from quant_agent.common.paths import ProjectPaths
 from quant_agent.common.run_index import RunIndex
-from quant_agent.data.providers.base import MarketDataProvider
+from quant_agent.data.providers.base import MarketDataProvider, PointInTimeMarketDataProvider
+from quant_agent.data.providers.factory import provider_from_config
 from quant_agent.data.providers.registry import AVAILABLE_PROVIDERS, create_market_data_provider
 from quant_agent.data.qlib_converter import QlibConverter
 from quant_agent.data.snapshot import SnapshotBuilder
+from quant_agent.data.snapshots import DataQualityError, DataSnapshotStore
 from quant_agent.evals.contracts import render_contract_eval_report, run_contract_evals
 from quant_agent.evals.data import render_data_eval_report, run_data_evals
 from quant_agent.evals.research import render_research_eval_report, run_research_evals
@@ -27,6 +29,7 @@ from quant_agent.research.snapshot_runner import SnapshotResearchRunner
 from quant_agent.risk.engine import RiskEngine
 from quant_agent.risk.reports import summarize_risk_decision
 from quant_agent.schemas.exporter import export_contract_schemas
+from quant_agent.workflow.daily import DailyWorkflow, DailyWorkflowResult
 
 app = typer.Typer(help="A-share quant agent command line interface.")
 data_app = typer.Typer(help="Data ingestion and conversion commands.")
@@ -38,6 +41,7 @@ report_app = typer.Typer(help="Report commands.")
 run_app = typer.Typer(help="Pipeline commands.")
 contracts_app = typer.Typer(help="Versioned contract commands.")
 eval_app = typer.Typer(help="Evaluation suite commands.")
+approval_app = typer.Typer(help="Manual approval commands.")
 app.add_typer(data_app, name="data")
 app.add_typer(research_app, name="research")
 app.add_typer(risk_app, name="risk")
@@ -47,6 +51,7 @@ app.add_typer(report_app, name="report")
 app.add_typer(run_app, name="run")
 app.add_typer(contracts_app, name="contracts")
 app.add_typer(eval_app, name="eval")
+app.add_typer(approval_app, name="approval")
 
 
 def _load_paths(config_path: Path, project_root: Path) -> tuple[ProjectPaths, str, bool]:
@@ -73,7 +78,7 @@ def _market_data_provider(
     symbols: tuple[str, ...] = (),
     lookback_days: int = 365,
     batch_size: int = 50,
-) -> MarketDataProvider:
+) -> PointInTimeMarketDataProvider:
     try:
         return create_market_data_provider(
             name,
@@ -83,6 +88,30 @@ def _market_data_provider(
         )
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+def _canonical_market_data_provider(
+    name: str,
+    *,
+    project_root: Path = Path("."),
+) -> MarketDataProvider:
+    try:
+        return provider_from_config(
+            name,
+            config_dir=project_root / "configs" / "data",
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _echo_daily_result(result: DailyWorkflowResult) -> None:
+    typer.echo(f"run_id: {result.run_id}")
+    typer.echo(f"status: {result.status.value}")
+    typer.echo(f"manifest: {result.manifest_path}")
+    if result.report_path:
+        typer.echo(f"report: {result.report_path}")
+    if result.instruction:
+        typer.echo(f"next: {result.instruction}")
 
 
 @app.command()
@@ -243,6 +272,37 @@ def data_pull(
     typer.echo(f"wrote sample daily bars to {output_path}")
 
 
+@data_app.command("sync")
+def data_sync(
+    trade_date: str = typer.Option(..., "--trade-date", help="Snapshot cutoff date."),
+    provider: str = typer.Option("sample", "--provider", help="sample, akshare, or tushare"),
+    config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Synchronize and validate an immutable canonical market-data snapshot."""
+    paths, _, _ = _load_paths(config, project_root)
+    paths.ensure()
+    try:
+        requested_date = date.fromisoformat(trade_date)
+        result = DataSnapshotStore(paths.artifact_dir).synchronize(
+            _canonical_market_data_provider(provider, project_root=project_root),
+            requested_date,
+        )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    except DataQualityError as exc:
+        typer.echo(f"data_version: {exc.manifest.data_version}")
+        typer.echo(f"valid: {exc.manifest.valid}")
+        typer.echo(f"snapshot: {exc.manifest.snapshot_dir}")
+        raise typer.Exit(2) from exc
+    except RuntimeError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    typer.echo(f"data_version: {result.manifest.data_version}")
+    typer.echo(f"valid: {result.manifest.valid}")
+    typer.echo(f"reused: {result.reused}")
+    typer.echo(f"manifest: {result.manifest_path}")
+
+
 @data_app.command("snapshot")
 def data_snapshot(
     as_of: str = typer.Option(
@@ -375,11 +435,19 @@ def risk_validate(
 @paper_app.command("run")
 def paper_run(
     approved: Path | None = None,
+    run_id: str | None = None,
     env_config: Path = Path("configs/env/dev.yaml"),
     project_root: Path = Path("."),
     account_value: float = 1_000_000,
 ) -> None:
     """Run local mock paper execution from approved positions."""
+    if run_id:
+        result = DailyWorkflow(
+            project_root=project_root,
+            env_config_path=env_config,
+        ).execute(run_id)
+        _echo_daily_result(result)
+        return
     paths, _, _ = _load_paths(env_config, project_root)
     approved_path = approved or Path(RunIndex(paths.artifact_dir).require("approved_positions"))
     orders_path, trades_path = PaperTradingRunner(
@@ -475,6 +543,76 @@ def run_pipeline(
     paper_run(env_config=config, project_root=project_root)
     report_generate(env_config=config, project_root=project_root)
     latest(config=config, project_root=project_root)
+
+
+@run_app.command("daily")
+def run_daily(
+    trade_date: str = typer.Option(..., "--trade-date"),
+    provider: str = typer.Option("sample", "--provider"),
+    config: Path = Path("configs/env/dev.yaml"),
+    research_config: Path = Path("configs/research/daily_momentum.yaml"),
+    risk_config: Path = Path("configs/risk/default.yaml"),
+    execution_config: Path = Path("configs/execution/paper_daily.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Run the strict daily workflow until manual approval is required."""
+    try:
+        requested_date = date.fromisoformat(trade_date)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    result = DailyWorkflow(
+        project_root=project_root,
+        env_config_path=config,
+        research_config_path=research_config,
+        risk_config_path=risk_config,
+        execution_config_path=execution_config,
+    ).start(trade_date=requested_date, provider_name=provider)
+    _echo_daily_result(result)
+
+
+@run_app.command("resume")
+def run_resume(
+    run_id: str = typer.Option(..., "--run-id"),
+    config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Resume the first failed or incomplete stage of a strict daily run."""
+    result = DailyWorkflow(project_root=project_root, env_config_path=config).resume(run_id)
+    _echo_daily_result(result)
+
+
+@run_app.command("show")
+def run_show(
+    run_id: str = typer.Option(..., "--run-id"),
+    config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Show a strict daily run manifest."""
+    manifest = DailyWorkflow(project_root=project_root, env_config_path=config).show(run_id)
+    typer.echo(manifest.model_dump_json(indent=2))
+
+
+@approval_app.command("grant")
+def approval_grant(
+    run_id: str = typer.Option(..., "--run-id"),
+    approver: str = typer.Option(..., "--approver"),
+    expires_in_minutes: int = typer.Option(60, "--expires-in-minutes", min=1),
+    config: Path = Path("configs/env/dev.yaml"),
+    project_root: Path = Path("."),
+) -> None:
+    """Grant an expiring approval for the exact risk-approved order plan."""
+    record, path = DailyWorkflow(
+        project_root=project_root,
+        env_config_path=config,
+    ).grant_approval(
+        run_id=run_id,
+        approver=approver,
+        expires_in_minutes=expires_in_minutes,
+    )
+    typer.echo(f"run_id: {record.run_id}")
+    typer.echo(f"plan_checksum: {record.plan_checksum}")
+    typer.echo(f"expires_at: {record.expires_at}")
+    typer.echo(f"approval: {path}")
 
 
 if __name__ == "__main__":

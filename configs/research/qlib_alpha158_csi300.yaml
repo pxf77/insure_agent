@@ -1,0 +1,104 @@
+research:
+  engine: qlib
+  strategy_id: qlib_alpha158_lgb_csi300_v1
+  universe: CSI300
+  benchmark: SH000300
+  label_horizon_days: 5
+  execution_lag_days: 1
+  rebalance_frequency: weekly
+
+temporal:
+  train_start: 2023-01-03
+  train_end: 2024-12-31
+  valid_start: 2025-01-02
+  valid_end: 2025-12-31
+  test_start: 2026-01-05
+  test_end: 2026-07-29
+
+portfolio:
+  topk: 50
+  lookback_days: 20
+  max_position_weight: 0.02
+
+costs:
+  commission_bps: 3
+  sell_stamp_duty_bps: 5
+  transfer_fee_bps: 0.1
+  slippage_bps: 10
+
+qlib:
+  provider_uri: __snapshot__
+  region: cn
+  experiment_name: quant-agent-alpha158
+  task:
+    model:
+      class: LGBModel
+      module_path: qlib.contrib.model.gbdt
+      kwargs:
+        loss: mse
+        learning_rate: 0.05
+        num_leaves: 64
+        max_depth: 8
+        colsample_bytree: 0.8879
+        subsample: 0.8789
+        reg_alpha: 0.0421
+        reg_lambda: 0.0736
+        num_threads: 4
+    dataset:
+      class: DatasetH
+      module_path: qlib.data.dataset
+      kwargs:
+        handler:
+          class: Alpha158
+          module_path: qlib.contrib.data.handler
+          kwargs:
+            start_time: 2023-01-03
+            end_time: 2026-07-29
+            fit_start_time: 2023-01-03
+            fit_end_time: 2024-12-31
+            instruments: all
+            label:
+              - Ref($close, -6) / Ref($close, -1) - 1
+            infer_processors:
+              - class: RobustZScoreNorm
+                kwargs:
+                  fields_group: feature
+                  clip_outlier: true
+              - class: Fillna
+                kwargs:
+                  fields_group: feature
+            learn_processors:
+              - class: DropnaLabel
+              - class: CSRankNorm
+                kwargs:
+                  fields_group: label
+        segments:
+          train:
+            - 2023-01-03
+            - 2024-12-31
+          valid:
+            - 2025-01-02
+            - 2025-12-31
+          test:
+            - 2026-01-05
+            - 2026-07-29
+  port_analysis_config:
+    strategy:
+      class: TopkDropoutStrategy
+      module_path: qlib.contrib.strategy.signal_strategy
+      kwargs:
+        signal: <PRED>
+        topk: 50
+        n_drop: 5
+    backtest:
+      start_time: 2026-01-05
+      end_time: 2026-07-29
+      account: 1000000
+      benchmark: SH000300
+      exchange_kwargs:
+        freq: day
+        limit_threshold: 0.095
+        deal_price: close
+        open_cost: 0.0003
+        close_cost: 0.0008
+        min_cost: 5

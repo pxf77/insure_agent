@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from quant_agent.data.providers.base import MarketDataProvider
+from quant_agent.data.providers.base import PointInTimeMarketDataProvider
 from quant_agent.data.providers.choice import ChoiceMarketDataProvider
 from quant_agent.data.providers.ifind import IFindMarketDataProvider
 from quant_agent.data.providers.synthetic import SyntheticMarketDataProvider
@@ -15,7 +15,7 @@ def create_market_data_provider(
     symbols: tuple[str, ...] = (),
     lookback_days: int = 365,
     batch_size: int = 50,
-) -> MarketDataProvider:
+) -> PointInTimeMarketDataProvider:
     if name == "synthetic":
         return SyntheticMarketDataProvider()
     if name == "synthetic-research":

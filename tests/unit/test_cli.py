@@ -65,3 +65,26 @@ def test_data_pull_and_convert_create_sample_outputs(tmp_path):
 
     assert convert_result.exit_code == 0
     assert (tmp_path / "artifacts" / "data" / "qlib" / "cn_data" / "metadata.json").is_file()
+
+
+def test_data_sync_creates_and_reuses_valid_snapshot(tmp_path):
+    args = [
+        "data",
+        "sync",
+        "--trade-date",
+        "2026-07-29",
+        "--provider",
+        "sample",
+        "--project-root",
+        str(tmp_path),
+    ]
+
+    first = runner.invoke(app, args)
+    second = runner.invoke(app, args)
+
+    assert first.exit_code == 0, first.stdout
+    assert "valid: True" in first.stdout
+    assert "reused: False" in first.stdout
+    assert second.exit_code == 0, second.stdout
+    assert "reused: True" in second.stdout
+    assert list((tmp_path / "artifacts" / "data" / "snapshots").rglob("data_manifest.json"))
